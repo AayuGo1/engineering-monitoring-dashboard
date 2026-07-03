@@ -21,6 +21,21 @@ a gradient top accent, hover elevation, tighter numeric typography for
 KPI values) while keeping every existing class, field, and method
 signature unchanged, so pages that build ``KPICard(...)`` etc. and
 call ``.render()`` continue to work without modification.
+
+Bugfix note
+-----------
+``BaseCard._render_html()`` previously returned HTML with blank lines
+separating indented tags. ``st.markdown()`` parses content as Markdown
+before honoring ``unsafe_allow_html=True``: a line beginning with a
+block tag (e.g. ``<div>``) opens a raw "HTML block" that Markdown
+passes through verbatim only until the next blank line. Once that
+blank line is hit, Markdown falls back to normal parsing, where any
+line indented 4+ spaces becomes an *indented code block* and is
+rendered as literal, escaped text rather than HTML. That is exactly
+why cards were showing raw ``<div class="card-header">`` tags on the
+page. The fix removes the blank lines inside the returned HTML string
+so the entire card stays inside a single continuous HTML block. No
+classes, attributes, content, or structure were changed.
 """
 
 from __future__ import annotations
@@ -274,45 +289,43 @@ class BaseCard(ABC):
         -------
         str
             Card HTML.
+
+        Notes
+        -----
+        The returned markup is intentionally kept as a single
+        continuous HTML block with no blank lines between tags.
+        ``st.markdown()`` parses content as Markdown before applying
+        ``unsafe_allow_html=True``: a blank line inside an HTML block
+        causes Markdown to exit raw-HTML mode, after which any
+        4-space-indented line is reinterpreted as an indented code
+        block and rendered as literal text instead of HTML. Keeping
+        the block blank-line-free avoids that failure mode.
         """
 
-        return f"""
-<div class="dashboard-card">
-
+        return f"""<div class="dashboard-card">
     <div class="card-header">
-
         <div class="card-icon">
             {_safe_text(self.icon)}
         </div>
-
         <div>
-
             <div class="card-title">
                 {_safe_text(self.title)}
             </div>
-
             <div class="card-subtitle">
                 {_safe_text(self.subtitle)}
             </div>
-
         </div>
-
     </div>
-
     <div class="card-value">
         {_safe_text(self.value)}
     </div>
-
     <div class="card-description">
         {_safe_text(self.description)}
     </div>
-
     <div class="card-footer">
         {_safe_text(self.footer)}
     </div>
-
-</div>
-"""
+</div>"""
 
     def render(self) -> None:
         """
