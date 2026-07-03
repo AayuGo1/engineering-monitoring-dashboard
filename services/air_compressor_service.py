@@ -46,7 +46,7 @@ This module intentionally contains:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, NoReturn, Optional
+from typing import Any, List, NoReturn, Optional
 
 import pandas as pd
 
@@ -73,9 +73,9 @@ class AirCompressorSummary:
         section.
     """
 
-    latest_reading: float | None
-    previous_reading: float | None
-    consumption: float | None
+    latest_reading: Optional[float]
+    previous_reading: Optional[float]
+    consumption: Optional[float]
     meter_count: int
 
 
@@ -98,11 +98,31 @@ class AirCompressorService:
     hardcoding a department or meter mapping.
     """
 
-    def __init__(self) -> None:
-        """Initialize the service and its collaborators."""
-        self._repository = EngineeringRepository()
-        self._calculator = ConsumptionCalculator()
-        self._date_filter = DateFilter()
+    def __init__(
+        self,
+        repository: Optional[EngineeringRepository] = None,
+        calculator: Optional[ConsumptionCalculator] = None,
+        date_filter: Optional[DateFilter] = None,
+    ) -> None:
+        """
+        Initialize the service and its collaborators.
+
+        Parameters
+        ----------
+        repository:
+            The ``EngineeringRepository`` instance to delegate all
+            workbook access to. Defaults to a new instance.
+        calculator:
+            The ``ConsumptionCalculator`` instance used to derive
+            consumption figures from readings. Defaults to a new
+            instance.
+        date_filter:
+            The ``DateFilter`` instance used to filter engineering
+            records by date. Defaults to a new instance.
+        """
+        self._repository = repository or EngineeringRepository()
+        self._calculator = calculator or ConsumptionCalculator()
+        self._date_filter = date_filter or DateFilter()
 
     # ------------------------------------------------------------------
     # Private Helpers
@@ -232,11 +252,11 @@ class AirCompressorService:
         self,
         mode: str = "latest",
         *,
-        selected_date=None,
-        month=None,
-        year=None,
-        start_date=None,
-        end_date=None,
+        selected_date: Optional[Any] = None,
+        month: Optional[Any] = None,
+        year: Optional[Any] = None,
+        start_date: Optional[Any] = None,
+        end_date: Optional[Any] = None,
     ) -> pd.Series:
         """
         Return the pressure meter's readings, optionally filtered by
@@ -278,11 +298,11 @@ class AirCompressorService:
         self,
         mode: str = "latest",
         *,
-        selected_date=None,
-        month=None,
-        year=None,
-        start_date=None,
-        end_date=None,
+        selected_date: Optional[Any] = None,
+        month: Optional[Any] = None,
+        year: Optional[Any] = None,
+        start_date: Optional[Any] = None,
+        end_date: Optional[Any] = None,
     ) -> pd.Series:
         """
         Return the air flow meter's readings, optionally filtered by
@@ -324,11 +344,11 @@ class AirCompressorService:
         self,
         mode: str = "latest",
         *,
-        selected_date=None,
-        month=None,
-        year=None,
-        start_date=None,
-        end_date=None,
+        selected_date: Optional[Any] = None,
+        month: Optional[Any] = None,
+        year: Optional[Any] = None,
+        start_date: Optional[Any] = None,
+        end_date: Optional[Any] = None,
     ) -> pd.Series:
         """
         Return the energy meter's consumption trend, optionally
