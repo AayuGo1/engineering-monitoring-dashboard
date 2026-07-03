@@ -159,6 +159,219 @@ class EngineeringRepository:
         return self._parser.get_department(name)
 
     # ------------------------------------------------------------------
+    # Private Helpers
+    # ------------------------------------------------------------------
+
+    def _require_department(
+        self,
+        department_name: str,
+    ) -> EngineeringDepartment:
+        """
+        Return a department or raise an exception if it does not exist.
+
+        Parameters
+        ----------
+        department_name:
+            Engineering department name.
+
+        Returns
+        -------
+        EngineeringDepartment
+
+        Raises
+        ------
+        ValueError
+            If the requested department cannot be found.
+        """
+        department = self.get_department(
+            department_name
+        )
+
+        if department is None:
+            raise ValueError(
+                f"Unknown department: '{department_name}'."
+            )
+
+        return department
+
+    def _require_meter(
+        self,
+        department_name: str,
+        meter_name: str,
+    ) -> EngineeringMeter:
+        """
+        Return a meter or raise an exception if it does not exist.
+
+        Parameters
+        ----------
+        department_name:
+            Engineering department name.
+
+        meter_name:
+            Engineering meter name.
+
+        Returns
+        -------
+        EngineeringMeter
+
+        Raises
+        ------
+        ValueError
+            If the requested meter cannot be found.
+        """
+        meter = self.get_meter(
+            department_name,
+            meter_name,
+        )
+
+        if meter is None:
+            raise ValueError(
+                f"Unknown meter '{meter_name}' "
+                f"in department '{department_name}'."
+            )
+
+        return meter
+
+    # ------------------------------------------------------------------
+    # Meters
+    # ------------------------------------------------------------------
+
+    def get_meters(
+        self,
+    ) -> List[EngineeringMeter]:
+        """
+        Return all engineering meters.
+
+        Returns
+        -------
+        list[EngineeringMeter]
+        """
+        return list(self._meters)
+
+    def get_meter(
+        self,
+        department_name: str,
+        meter_name: str,
+    ) -> Optional[EngineeringMeter]:
+        """
+        Locate a meter within a department.
+
+        Parameters
+        ----------
+        department_name:
+            Department name.
+
+        meter_name:
+            Meter name.
+
+        Returns
+        -------
+        EngineeringMeter | None
+        """
+        department = self.get_department(
+            department_name
+        )
+
+        if department is None:
+            return None
+
+        normalized = meter_name.strip().casefold()
+
+        for meter in department.meters:
+            if meter.meter_name.casefold() == normalized:
+                return meter
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Engineering Data Access
+    # ------------------------------------------------------------------
+
+    def get_department_dataframe(
+        self,
+        department_name: str,
+    ) -> pd.DataFrame:
+        """
+        Return engineering readings for a department.
+        """
+        department = self._require_department(
+            department_name
+        )
+
+        dataframe = self.get_engineering_dataframe()
+
+        column_indices = [
+            meter.column_index
+            for meter in department.meters
+        ]
+
+        return dataframe.iloc[:, column_indices].copy()
+
+    def get_meter_dataframe(
+        self,
+        department_name: str,
+        meter_name: str,
+    ) -> pd.Series:
+        """
+        Return engineering readings for a single meter.
+        """
+        meter = self._require_meter(
+            department_name,
+            meter_name,
+        )
+
+        dataframe = self.get_engineering_dataframe()
+
+        return dataframe.iloc[
+            :,
+            meter.column_index,
+        ].copy()
+
+    def get_latest_record(self) -> pd.Series:
+        """
+        Return the latest engineering record.
+        """
+        dataframe = self.get_engineering_dataframe()
+
+        if dataframe.empty:
+            raise ValueError(
+                "No engineering records available."
+            )
+
+        return dataframe.iloc[-1].copy()
+
+    # ------------------------------------------------------------------
+    # Display Metadata
+    # ------------------------------------------------------------------
+
+    def get_department_names(
+        self,
+    ) -> tuple[str, ...]:
+        """
+        Return department display names in workbook order.
+        """
+        return tuple(
+            department.display_name
+            for department in self.get_departments()
+        )
+
+    def get_meter_names(
+        self,
+        department_name: str,
+    ) -> tuple[str, ...]:
+        """
+        Return meter display names for a department.
+        """
+        department = self._require_department(
+            department_name
+        )
+
+        return tuple(
+            meter.display_name
+            for meter in department.meters
+        )
+    
+    # ------------------------------------------------------------------
     # Meters
     # ------------------------------------------------------------------
 
