@@ -255,6 +255,54 @@ class DepartmentAnalysisService:
 
         return dataframe.copy()
 
+    # ------------------------------------------------------------------
+    # Private Helpers
+    # ------------------------------------------------------------------
+
+    def _calculate_summary_from_dataframe(
+        self,
+        dataframe: pd.DataFrame,
+    ) -> tuple[
+        float | None,
+        float | None,
+        float | None,
+    ]:
+        """
+        Calculate latest, previous, and consumption values for a
+        department DataFrame.
+
+        Iterates the DataFrame's columns using ``ConsumptionCalculator``
+        and returns the values from the first column that yields a
+        valid latest reading.
+
+        Parameters
+        ----------
+        dataframe:
+            The department's engineering records.
+
+        Returns
+        -------
+        tuple[float | None, float | None, float | None]
+            A ``(latest, previous, consumption)`` tuple. Returns
+            ``(None, None, None)`` if the DataFrame is empty or
+            contains no valid numeric readings.
+        """
+        latest = None
+        previous = None
+        consumption = None
+
+        for column in dataframe.columns:
+            series = dataframe[column]
+
+            latest = self._calculator.latest_reading(series)
+            previous = self._calculator.previous_reading(series)
+            consumption = self._calculator.calculate_consumption(series)
+
+            if latest is not None:
+                break
+
+        return latest, previous, consumption
+
     def get_department_summary(self, department_name: str) -> DepartmentSummary:
         """
         Return summary information for a department.
@@ -284,19 +332,9 @@ class DepartmentAnalysisService:
                 meter_count=0,
             )
 
-        latest = None
-        previous = None
-        consumption = None
-
-        for column in dataframe.columns:
-            series = dataframe[column]
-
-            latest = self._calculator.latest_reading(series)
-            previous = self._calculator.previous_reading(series)
-            consumption = self._calculator.calculate_consumption(series)
-
-            if latest is not None:
-                break
+        latest, previous, consumption = self._calculate_summary_from_dataframe(
+            dataframe
+        )
 
         department = self.get_department(department_name)
 
