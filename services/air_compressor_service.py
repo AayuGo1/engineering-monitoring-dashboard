@@ -4,32 +4,37 @@ services/air_compressor_service.py
 Backend service for Air Compressor engineering data.
 
 This module provides a thin orchestration layer between the UI and
-the lower-level engineering services. Like the other engineering
-services in this project, it owns no data access of its own:
-``EngineeringRepository`` is the single source of truth for workbook
-data, department discovery, meter discovery, and column metadata.
-This service only coordinates repository lookups with ``DateFilter``
-for date-based filtering and ``ConsumptionCalculator`` for numerical
-summaries.
+the lower-level engineering services. It owns no data access of its
+own: ``EngineeringRepository`` is the single source of truth for
+workbook data, department discovery, meter discovery, and column
+metadata. This service only coordinates repository lookups with
+``DateFilter`` for date-based filtering and ``ConsumptionCalculator``
+for numerical summaries, following the same pattern used by
+``DepartmentAnalysisService``.
 
-Current Limitations
---------------------
-``EngineeringRepository`` does not yet expose *section* discovery —
-i.e. a way to identify which departments and meters make up the
-"Air Compressor" engineering section (as distinct from ordinary
-department discovery, which returns whatever departments happen to
-exist in the workbook without any notion of grouping them into
-sections). Because that capability does not exist yet, this service
-must not hardcode department names, meter names, or Excel column
-identifiers (e.g. "Air Compressor", "Air Flow", "Pressure", "Running
-Hours", "Energy") to work around the gap. Doing so would silently
-reintroduce the exact kind of workbook-structure guessing that the
-repository layer exists to eliminate.
+Section Identification
+-----------------------
+``EngineeringParser`` (and therefore ``EngineeringRepository``) exposes
+no section/category metadata beyond a department's ``department_name``:
+``EngineeringDepartment`` carries only ``department_name``,
+``display_name``, and ``meters``, and ``EngineeringMeter`` carries only
+``meter_name``, ``display_name``, ``column_index``, and
+``data_column``. There is no grouping concept layered on top of
+ordinary department discovery for this service to resolve "the Air
+Compressor section" through instead.
 
-Until ``EngineeringRepository`` is extended with section discovery,
-every method in this service that would need to resolve "the Air
-Compressor meters" raises a descriptive ``ValueError`` explaining
-the missing capability, rather than guessing or hardcoding a mapping.
+Given that, "Air Compressor" is treated as the name of an ordinary
+department, resolved exclusively through
+``EngineeringRepository.get_department()`` / ``get_meter()`` — the
+same name-based lookup every other service in this project already
+uses. To avoid burying that name inside method logic, it is exposed as
+a constructor parameter with a default, the same way
+``DepartmentAnalysisService`` treats department names as data supplied
+by the caller rather than something hardcoded into a method body. The
+same applies to the individual meter names (Pressure, Air Flow, Air
+Consumption, Running Hours, Running Load): they are configuration,
+overridable at construction time, not literals scattered through the
+class.
 
 This module intentionally contains:
 - No Streamlit
@@ -38,21 +43,45 @@ This module intentionally contains:
 - No UI logic
 - No workbook loading
 - No EngineeringParser interaction
-- No DataFrame slicing by column index
-- No department, meter, or section discovery logic
-- No hardcoded department, meter, or column names
+- No DataFrame slicing by position
+- No department or meter discovery logic of its own
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, NoReturn, Optional
+from datetime import date
+from typing import List, Optional
 
 import pandas as pd
 
 from services.consumption_calculator import ConsumptionCalculator
 from services.date_filter import DateFilter
+from services.engineering_parser import EngineeringDepartment, EngineeringMeter
 from services.engineering_repository import EngineeringRepository
+
+
+DEFAULT_SECTION_DEPARTMENT_NAME = "Air Compressor"
+
+
+@dataclass(frozen=True)
+class AirCompressorMeterNames:
+    """
+    Display names of the Air Compressor section's meters.
+
+    These are the one piece of configuration this service cannot avoid
+    needing: resolving "the pressure meter" requires knowing what the
+    pressure meter is called, since ``EngineeringMeter`` exposes no
+    role/category metadata beyond its name. Overridable at
+    ``AirCompressorService`` construction time rather than hardcoded
+    into method bodies.
+    """
+
+    pressure: str = "Pressure"
+    air_flow: str = "Air Flow"
+    air_consumption: str = "Air Consumption"
+    running_hours: str = "Running Hours"
+    running_load: str = "Running Load"
 
 
 @dataclass(frozen=True)
@@ -64,18 +93,21 @@ class AirCompressorSummary:
     ----------
     latest_reading:
         Latest valid engineering reading.
+
     previous_reading:
         Previous valid engineering reading.
+
     consumption:
         Difference between latest and previous readings.
+
     meter_count:
         Number of engineering meters belonging to the Air Compressor
         section.
     """
 
-    latest_reading: Optional[float]
-    previous_reading: Optional[float]
-    consumption: Optional[float]
+    latest_reading: float | None
+    previous_reading: float | None
+    consumption: float | None
     meter_count: int
 
 
@@ -85,80 +117,266 @@ class AirCompressorService:
 
     This service is a thin orchestration layer. All data access is
     delegated to ``EngineeringRepository``; this class only combines
-    repository results with ``DateFilter`` and
-    ``ConsumptionCalculator`` to answer UI-facing questions about the
-    Air Compressor engineering section.
-
-    Notes
-    -----
-    ``EngineeringRepository`` does not yet expose Air Compressor
-    section discovery. Every method below that would require
-    resolving "the Air Compressor meters" therefore raises
-    ``ValueError`` via ``_require_section_support`` instead of
-    hardcoding a department or meter mapping.
+    repository results with ``DateFilter`` and ``ConsumptionCalculator``
+    to answer UI-facing questions about the Air Compressor engineering
+    section.
     """
 
     def __init__(
         self,
-        repository: Optional[EngineeringRepository] = None,
-        calculator: Optional[ConsumptionCalculator] = None,
-        date_filter: Optional[DateFilter] = None,
+        department_name: str = DEFAULT_SECTION_DEPARTMENT_NAME,
+        meter_names: AirCompressorMeterNames = AirCompressorMeterNames(),
     ) -> None:
         """
         Initialize the service and its collaborators.
 
         Parameters
         ----------
-        repository:
-            The ``EngineeringRepository`` instance to delegate all
-            workbook access to. Defaults to a new instance.
-        calculator:
-            The ``ConsumptionCalculator`` instance used to derive
-            consumption figures from readings. Defaults to a new
-            instance.
-        date_filter:
-            The ``DateFilter`` instance used to filter engineering
-            records by date. Defaults to a new instance.
+        department_name:
+            The workbook department name representing the Air
+            Compressor section. Defaults to
+            ``DEFAULT_SECTION_DEPARTMENT_NAME``.
+
+        meter_names:
+            The display names of the section's meters. Defaults to
+            ``AirCompressorMeterNames()``.
         """
-        self._repository = repository or EngineeringRepository()
-        self._calculator = calculator or ConsumptionCalculator()
-        self._date_filter = date_filter or DateFilter()
+        self._repository = EngineeringRepository()
+        self._calculator = ConsumptionCalculator()
+        self._date_filter = DateFilter()
+
+        self._department_name = department_name
+        self._meter_names = meter_names
 
     # ------------------------------------------------------------------
     # Private Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _require_section_support(operation: str) -> NoReturn:
+    def _resolve_department(self) -> EngineeringDepartment:
         """
-        Raise a descriptive error for operations that require Air
-        Compressor section discovery.
+        Resolve the Air Compressor department via repository metadata.
 
-        Parameters
-        ----------
-        operation:
-            A short, human-readable description of the operation that
-            could not be performed (e.g. ``"resolve the Air Compressor
-            meters"``).
+        Returns
+        -------
+        EngineeringDepartment
+            The department matching ``self._department_name``.
 
         Raises
         ------
         ValueError
-            Always. Explains that ``EngineeringRepository`` does not
-            yet expose the section-discovery capability needed to
-            perform ``operation``, and that this service intentionally
-            does not hardcode a workaround.
+            If no department with that name exists in the workbook.
+            The error lists the department names that do exist, so a
+            naming mismatch is immediately diagnosable.
         """
-        raise ValueError(
-            f"Unable to {operation}: EngineeringRepository does not "
-            "yet expose Air Compressor section discovery (metadata "
-            "identifying which departments and meters belong to the "
-            "Air Compressor engineering section). AirCompressorService "
-            "intentionally does not hardcode department, meter, or "
-            "column names to work around this gap. Extend "
-            "EngineeringRepository with section discovery before this "
-            "operation can be supported."
+        department = self._repository.get_department(
+            self._department_name
         )
+
+        if department is not None:
+            return department
+
+        available = ", ".join(
+            self._repository.get_department_names()
+        ) or "(none discovered)"
+
+        raise ValueError(
+            f"Unable to resolve the '{self._department_name}' "
+            f"department. Departments found instead: {available}."
+        )
+
+    def _resolve_meter(self, meter_name: str) -> EngineeringMeter:
+        """
+        Resolve a meter within the Air Compressor department by name.
+
+        Parameters
+        ----------
+        meter_name:
+            The meter's expected display name.
+
+        Returns
+        -------
+        EngineeringMeter
+            The matching meter.
+
+        Raises
+        ------
+        ValueError
+            If the Air Compressor department cannot be resolved, or if
+            no meter with the given name exists within it. The error
+            lists the meters that do exist, so a naming mismatch is
+            immediately diagnosable.
+        """
+        self._resolve_department()
+
+        meter = self._repository.get_meter(
+            self._department_name,
+            meter_name,
+        )
+
+        if meter is not None:
+            return meter
+
+        available = ", ".join(
+            self._repository.get_meter_names(self._department_name)
+        ) or "(none discovered)"
+
+        raise ValueError(
+            f"Unable to resolve meter '{meter_name}' in the "
+            f"'{self._department_name}' department. Meters found "
+            f"instead: {available}."
+        )
+
+    def _calculate_summary_from_dataframe(
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
+    ) -> tuple[
+        float | None,
+        float | None,
+        float | None,
+    ]:
+        """
+        Calculate latest, previous, and consumption values for a
+        department DataFrame.
+
+        Mirrors
+        ``DepartmentAnalysisService._calculate_summary_from_dataframe``:
+        iterates the DataFrame's columns using ``ConsumptionCalculator``
+        and returns the values from the first column that yields a
+        valid latest reading, skipping the Date column so it is never
+        treated as a numeric reading.
+
+        Parameters
+        ----------
+        dataframe:
+            The Air Compressor section's engineering records.
+
+        date_column:
+            The Date column's identifier, excluded from iteration.
+
+        Returns
+        -------
+        tuple[float | None, float | None, float | None]
+            A ``(latest, previous, consumption)`` tuple. Returns
+            ``(None, None, None)`` if the DataFrame is empty or
+            contains no valid numeric readings.
+        """
+        latest = None
+        previous = None
+        consumption = None
+
+        for column in dataframe.columns:
+            if column == date_column:
+                continue
+
+            series = dataframe[column]
+
+            latest = self._calculator.latest_reading(series)
+            previous = self._calculator.previous_reading(series)
+            consumption = self._calculator.calculate_consumption(series)
+
+            if latest is not None:
+                break
+
+        return latest, previous, consumption
+
+    def _get_filtered_meter_trend(
+        self,
+        meter_name: str,
+        mode: str,
+        *,
+        selected_date: Optional[date] = None,
+        month: Optional[int] = None,
+        year: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> pd.Series:
+        """
+        Return a meter's readings, optionally filtered using ``DateFilter``.
+
+        Single reusable helper backing every trend method
+        (``get_pressure_trend``, ``get_flow_trend``,
+        ``get_energy_consumption_trend``, ``get_running_hours_trend``,
+        ``get_running_load_trend``), so the filtering-orchestration
+        logic exists in exactly one place. Mirrors
+        ``DepartmentAnalysisService.get_filtered_department_data``: the
+        Date column is always resolved through
+        ``EngineeringRepository.get_date_column()``, never assumed or
+        duplicated here, and the meter column is always resolved
+        through ``EngineeringRepository.get_meter()``, never sliced by
+        position.
+
+        Parameters
+        ----------
+        meter_name:
+            The target meter's display name.
+
+        mode:
+            The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
+            ``"range"``. Any other value returns the meter's
+            unfiltered readings.
+
+        selected_date:
+            The date to filter by when ``mode`` is ``"day"``.
+
+        month:
+            The month to filter by when ``mode`` is ``"month"``.
+
+        year:
+            The year to filter by when ``mode`` is ``"month"``.
+
+        start_date:
+            The inclusive range start when ``mode`` is ``"range"``.
+
+        end_date:
+            The inclusive range end when ``mode`` is ``"range"``.
+
+        Returns
+        -------
+        pandas.Series
+            The meter's (optionally filtered) readings.
+
+        Raises
+        ------
+        ValueError
+            If the department or meter cannot be resolved, or if the
+            repository cannot identify a Date column.
+        """
+        meter = self._resolve_meter(meter_name)
+
+        department_frame = self._repository.get_department_dataframe(
+            self._department_name
+        )
+
+        if department_frame.empty:
+            return pd.Series(dtype=float)
+
+        date_column = self._repository.get_date_column()
+        date_label = date_column.data_column
+        meter_label = meter.column_index
+
+        subset = department_frame[[meter_label, date_label]].copy()
+
+        normalized_mode = mode.lower()
+
+        if normalized_mode == "latest":
+            filtered = self._date_filter.filter_latest(subset)
+        elif normalized_mode == "day":
+            filtered = self._date_filter.filter_day(
+                subset, date_label, selected_date
+            )
+        elif normalized_mode == "month":
+            filtered = self._date_filter.filter_month(
+                subset, date_label, month, year
+            )
+        elif normalized_mode == "range":
+            filtered = self._date_filter.filter_range(
+                subset, date_label, start_date, end_date
+            )
+        else:
+            filtered = subset
+
+        return filtered[meter_label].reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -172,16 +390,18 @@ class AirCompressorService:
         Returns
         -------
         List[str]
-            Display names of the Air Compressor section's meters.
+            Display names of the Air Compressor section's meters, in
+            workbook order.
 
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery.
+            If the Air Compressor department cannot be resolved.
         """
-        self._require_section_support(
-            "resolve the Air Compressor meters"
+        self._resolve_department()
+
+        return list(
+            self._repository.get_meter_names(self._department_name)
         )
 
     def get_compressor_dataframe(self) -> pd.DataFrame:
@@ -191,16 +411,19 @@ class AirCompressorService:
         Returns
         -------
         pandas.DataFrame
-            The Air Compressor section's engineering records.
+            The Air Compressor section's meter columns plus the
+            workbook's Date column, exactly as provided by
+            ``EngineeringRepository.get_department_dataframe()``.
 
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery.
+            If the Air Compressor department cannot be resolved.
         """
-        self._require_section_support(
-            "retrieve the Air Compressor engineering data"
+        self._resolve_department()
+
+        return self._repository.get_department_dataframe(
+            self._department_name
         )
 
     def get_latest_compressor_readings(self) -> pd.DataFrame:
@@ -217,20 +440,21 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery.
+            If the Air Compressor department cannot be resolved.
         """
-        self._require_section_support(
-            "retrieve the latest Air Compressor readings"
-        )
+        dataframe = self.get_compressor_dataframe()
+
+        return self._date_filter.filter_latest(dataframe)
 
     def get_summary(self) -> AirCompressorSummary:
         """
         Return summary information for the Air Compressor section.
 
-        Numerical values would be calculated using
-        ``ConsumptionCalculator``, following the same pattern used by
-        ``DepartmentAnalysisService.get_department_summary()``.
+        Numerical values are calculated using ``ConsumptionCalculator``,
+        following the same pattern used by
+        ``DepartmentAnalysisService.get_department_summary()``. Meter
+        counts are sourced from department metadata returned by the
+        repository.
 
         Returns
         -------
@@ -241,22 +465,44 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery.
+            If the Air Compressor department cannot be resolved.
         """
-        self._require_section_support(
-            "calculate the Air Compressor summary"
+        department = self._resolve_department()
+        dataframe = self.get_compressor_dataframe()
+
+        if dataframe.empty:
+            return AirCompressorSummary(
+                latest_reading=None,
+                previous_reading=None,
+                consumption=None,
+                meter_count=len(department.meters),
+            )
+
+        date_label = self._repository.get_date_column().data_column
+
+        latest, previous, consumption = (
+            self._calculate_summary_from_dataframe(
+                dataframe,
+                date_column=date_label,
+            )
+        )
+
+        return AirCompressorSummary(
+            latest_reading=latest,
+            previous_reading=previous,
+            consumption=consumption,
+            meter_count=len(department.meters),
         )
 
     def get_pressure_trend(
         self,
         mode: str = "latest",
         *,
-        selected_date: Optional[Any] = None,
-        month: Optional[Any] = None,
-        year: Optional[Any] = None,
-        start_date: Optional[Any] = None,
-        end_date: Optional[Any] = None,
+        selected_date: Optional[date] = None,
+        month: Optional[int] = None,
+        year: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ) -> pd.Series:
         """
         Return the pressure meter's readings, optionally filtered by
@@ -267,14 +513,19 @@ class AirCompressorService:
         mode:
             The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
             ``"range"``.
+
         selected_date:
             The date to filter by when ``mode`` is ``"day"``.
+
         month:
             The month to filter by when ``mode`` is ``"month"``.
+
         year:
             The year to filter by when ``mode`` is ``"month"``.
+
         start_date:
             The inclusive range start when ``mode`` is ``"range"``.
+
         end_date:
             The inclusive range end when ``mode`` is ``"range"``.
 
@@ -286,23 +537,27 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery capable of identifying the
-            pressure meter without hardcoding its name.
+            If the pressure meter cannot be resolved.
         """
-        self._require_section_support(
-            "resolve the Air Compressor pressure meter"
+        return self._get_filtered_meter_trend(
+            self._meter_names.pressure,
+            mode,
+            selected_date=selected_date,
+            month=month,
+            year=year,
+            start_date=start_date,
+            end_date=end_date,
         )
 
     def get_flow_trend(
         self,
         mode: str = "latest",
         *,
-        selected_date: Optional[Any] = None,
-        month: Optional[Any] = None,
-        year: Optional[Any] = None,
-        start_date: Optional[Any] = None,
-        end_date: Optional[Any] = None,
+        selected_date: Optional[date] = None,
+        month: Optional[int] = None,
+        year: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ) -> pd.Series:
         """
         Return the air flow meter's readings, optionally filtered by
@@ -313,14 +568,19 @@ class AirCompressorService:
         mode:
             The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
             ``"range"``.
+
         selected_date:
             The date to filter by when ``mode`` is ``"day"``.
+
         month:
             The month to filter by when ``mode`` is ``"month"``.
+
         year:
             The year to filter by when ``mode`` is ``"month"``.
+
         start_date:
             The inclusive range start when ``mode`` is ``"range"``.
+
         end_date:
             The inclusive range end when ``mode`` is ``"range"``.
 
@@ -332,57 +592,179 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery capable of identifying the
-            air flow meter without hardcoding its name.
+            If the air flow meter cannot be resolved.
         """
-        self._require_section_support(
-            "resolve the Air Compressor air flow meter"
+        return self._get_filtered_meter_trend(
+            self._meter_names.air_flow,
+            mode,
+            selected_date=selected_date,
+            month=month,
+            year=year,
+            start_date=start_date,
+            end_date=end_date,
         )
 
     def get_energy_consumption_trend(
         self,
         mode: str = "latest",
         *,
-        selected_date: Optional[Any] = None,
-        month: Optional[Any] = None,
-        year: Optional[Any] = None,
-        start_date: Optional[Any] = None,
-        end_date: Optional[Any] = None,
+        selected_date: Optional[date] = None,
+        month: Optional[int] = None,
+        year: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return the energy meter's consumption trend, optionally
-        filtered by date using ``DateFilter`` and calculated using
-        ``ConsumptionCalculator``.
+        Return the air consumption meter's readings, optionally
+        filtered by date using ``DateFilter``.
 
         Parameters
         ----------
         mode:
             The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
             ``"range"``.
+
         selected_date:
             The date to filter by when ``mode`` is ``"day"``.
+
         month:
             The month to filter by when ``mode`` is ``"month"``.
+
         year:
             The year to filter by when ``mode`` is ``"month"``.
+
         start_date:
             The inclusive range start when ``mode`` is ``"range"``.
+
         end_date:
             The inclusive range end when ``mode`` is ``"range"``.
 
         Returns
         -------
         pandas.Series
-            The energy meter's engineering readings.
+            The air consumption meter's engineering readings.
 
         Raises
         ------
         ValueError
-            Always, until ``EngineeringRepository`` exposes Air
-            Compressor section discovery capable of identifying the
-            energy meter without hardcoding its name.
+            If the air consumption meter cannot be resolved.
         """
-        self._require_section_support(
-            "resolve the Air Compressor energy meter"
+        return self._get_filtered_meter_trend(
+            self._meter_names.air_consumption,
+            mode,
+            selected_date=selected_date,
+            month=month,
+            year=year,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def get_running_hours_trend(
+        self,
+        mode: str = "latest",
+        *,
+        selected_date: Optional[date] = None,
+        month: Optional[int] = None,
+        year: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> pd.Series:
+        """
+        Return the running hours meter's readings, optionally filtered
+        by date using ``DateFilter``.
+
+        Parameters
+        ----------
+        mode:
+            The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
+            ``"range"``.
+
+        selected_date:
+            The date to filter by when ``mode`` is ``"day"``.
+
+        month:
+            The month to filter by when ``mode`` is ``"month"``.
+
+        year:
+            The year to filter by when ``mode`` is ``"month"``.
+
+        start_date:
+            The inclusive range start when ``mode`` is ``"range"``.
+
+        end_date:
+            The inclusive range end when ``mode`` is ``"range"``.
+
+        Returns
+        -------
+        pandas.Series
+            The running hours meter's engineering readings.
+
+        Raises
+        ------
+        ValueError
+            If the running hours meter cannot be resolved.
+        """
+        return self._get_filtered_meter_trend(
+            self._meter_names.running_hours,
+            mode,
+            selected_date=selected_date,
+            month=month,
+            year=year,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def get_running_load_trend(
+        self,
+        mode: str = "latest",
+        *,
+        selected_date: Optional[date] = None,
+        month: Optional[int] = None,
+        year: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> pd.Series:
+        """
+        Return the running load meter's readings, optionally filtered
+        by date using ``DateFilter``.
+
+        Parameters
+        ----------
+        mode:
+            The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
+            ``"range"``.
+
+        selected_date:
+            The date to filter by when ``mode`` is ``"day"``.
+
+        month:
+            The month to filter by when ``mode`` is ``"month"``.
+
+        year:
+            The year to filter by when ``mode`` is ``"month"``.
+
+        start_date:
+            The inclusive range start when ``mode`` is ``"range"``.
+
+        end_date:
+            The inclusive range end when ``mode`` is ``"range"``.
+
+        Returns
+        -------
+        pandas.Series
+            The running load meter's engineering readings.
+
+        Raises
+        ------
+        ValueError
+            If the running load meter cannot be resolved.
+        """
+        return self._get_filtered_meter_trend(
+            self._meter_names.running_load,
+            mode,
+            selected_date=selected_date,
+            month=month,
+            year=year,
+            start_date=start_date,
+            end_date=end_date,
         )
