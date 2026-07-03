@@ -3,14 +3,11 @@ services/overview_service.py
 
 Backend service for the Overview Dashboard.
 
-This module provides a single backend interface for the Overview page.
-It encapsulates workbook loading, engineering parsing, and exposes
-metadata and engineering data through a stable, strongly-typed API.
+This module provides a lightweight backend façade for the Overview page.
+Workbook loading and parsing are delegated to EngineeringRepository.
 
 Responsibilities
 ----------------
-- Load the raw engineering worksheet.
-- Parse the engineering workbook.
 - Expose workbook metadata.
 - Expose engineering departments.
 - Expose engineering data.
@@ -21,9 +18,9 @@ This module intentionally contains:
 - No UI
 - No Plotly
 - No HTML
+- No workbook loading
+- No workbook parsing
 - No engineering calculations
-- No KPI calculations
-- No aggregation logic
 """
 
 from __future__ import annotations
@@ -33,14 +30,12 @@ from typing import List, Optional
 
 import pandas as pd
 
-from data.loader import load_raw_sheet1
 from services.engineering_parser import (
-    DATA_START_ROW,
     EngineeringDepartment,
     EngineeringMeter,
-    EngineeringParser,
     EngineeringWorkbook,
 )
+from services.engineering_repository import EngineeringRepository
 
 
 # =============================================================================
@@ -52,20 +47,6 @@ from services.engineering_parser import (
 class DashboardSummary:
     """
     Summary metadata required by dashboard pages.
-
-    Attributes
-    ----------
-    workbook_loaded:
-        Indicates whether the workbook was successfully loaded.
-
-    department_count:
-        Number of discovered engineering departments.
-
-    meter_count:
-        Number of discovered engineering meters.
-
-    latest_record_count:
-        Number of engineering records available after the header rows.
     """
 
     workbook_loaded: bool
@@ -83,27 +64,14 @@ class OverviewService:
     """
     Backend service powering the Overview Dashboard.
 
-    The workbook is loaded and parsed once during construction. Parsed
-    metadata is cached inside the service instance.
+    This service acts as a lightweight façade over EngineeringRepository.
     """
 
     def __init__(self) -> None:
-        """Initialize the Overview service."""
-
-        self._workbook_loaded = False
-
-        self._raw_sheet = load_raw_sheet1()
-
-        self._parser = EngineeringParser(self._raw_sheet)
-
-        self._workbook = self._parser.parse()
-
-        self._data = (
-            self._raw_sheet.iloc[DATA_START_ROW:]
-            .reset_index(drop=True)
-        )
-
-        self._workbook_loaded = True
+        """
+        Initialize the Overview service.
+        """
+        self._repository = EngineeringRepository()
 
     # ------------------------------------------------------------------
     # Private Helpers
@@ -129,18 +97,10 @@ class OverviewService:
         -------
         EngineeringMeter | None
         """
-        department = self.get_department(department_name)
-
-        if department is None:
-            return None
-
-        normalized = meter_name.strip().casefold()
-
-        for meter in department.meters:
-            if meter.meter_name.casefold() == normalized:
-                return meter
-
-        return None
+        return self._repository.get_meter(
+            department_name,
+            meter_name,
+        )
 
     # ------------------------------------------------------------------
     # Existing Public API (Backward Compatible)
@@ -148,13 +108,13 @@ class OverviewService:
 
     def get_workbook(self) -> EngineeringWorkbook:
         """
-        Return the parsed engineering workbook.
+        Return parsed engineering workbook metadata.
 
         Returns
         -------
         EngineeringWorkbook
         """
-        return self._workbook
+        return self._repository.get_workbook()
 
     def get_departments(self) -> List[EngineeringDepartment]:
         """
@@ -164,7 +124,7 @@ class OverviewService:
         -------
         list[EngineeringDepartment]
         """
-        return self._parser.discover_departments()
+        return self._repository.get_departments()
 
     def get_department(
         self,
@@ -182,7 +142,7 @@ class OverviewService:
         -------
         EngineeringDepartment | None
         """
-        return self._parser.get_department(name)
+        return self._repository.get_department(name)
 
     def get_department_dataframe(
         self,
@@ -212,12 +172,14 @@ class OverviewService:
                 f"Unknown department: '{name}'."
             )
 
+        dataframe = self._repository.get_engineering_dataframe()
+
         column_indices = [
             meter.column_index
             for meter in department.meters
         ]
 
-        return self._data.iloc[:, column_indices].copy()
+        return dataframe.iloc[:, column_indices].copy()
 
     def get_meter_dataframe(
         self,
@@ -255,7 +217,9 @@ class OverviewService:
                 f"in department '{department_name}'."
             )
 
-        return self._data.iloc[:, meter.column_index].copy()
+        dataframe = self._repository.get_engineering_dataframe()
+
+        return dataframe.iloc[:, meter.column_index].copy()
 
     def get_latest_record(self) -> pd.Series:
         """
@@ -270,15 +234,17 @@ class OverviewService:
         ValueError
             If no engineering records are available.
         """
-        if self._data.empty:
+        dataframe = self._repository.get_engineering_dataframe()
+
+        if dataframe.empty:
             raise ValueError(
                 "No engineering records available."
             )
 
-        return self._data.iloc[-1].copy()
+        return dataframe.iloc[-1].copy()
 
     # ------------------------------------------------------------------
-    # Extended Dashboard API
+    # Dashboard Metadata
     # ------------------------------------------------------------------
 
     def is_workbook_loaded(self) -> bool:
@@ -289,7 +255,7 @@ class OverviewService:
         -------
         bool
         """
-        return self._workbook_loaded
+        return self._repository.is_loaded()
 
     def get_department_count(self) -> int:
         """
@@ -299,35 +265,38 @@ class OverviewService:
         -------
         int
         """
-        return len(self.get_departments())
+        return self._repository.get_department_count()
 
     def get_meter_count(self) -> int:
         """
-        Return the total number of engineering meters.
+        Return the number of engineering meters.
 
         Returns
         -------
         int
         """
-        return sum(
-            len(department.meters)
-            for department in self.get_departments()
-        )
+        return self._repository.get_meter_count()
 
     def get_dashboard_summary(self) -> DashboardSummary:
         """
-        Return summary metadata required by dashboard pages.
+        Return dashboard summary metadata.
 
         Returns
         -------
         DashboardSummary
         """
+        dataframe = self._repository.get_engineering_dataframe()
+
         return DashboardSummary(
-            workbook_loaded=self.is_workbook_loaded(),
-            department_count=self.get_department_count(),
-            meter_count=self.get_meter_count(),
-            latest_record_count=len(self._data),
+            workbook_loaded=self._repository.is_loaded(),
+            department_count=self._repository.get_department_count(),
+            meter_count=self._repository.get_meter_count(),
+            latest_record_count=len(dataframe),
         )
+
+    # ------------------------------------------------------------------
+    # Placeholder APIs
+    # ------------------------------------------------------------------
 
     def get_latest_reading(self) -> None:
         """
