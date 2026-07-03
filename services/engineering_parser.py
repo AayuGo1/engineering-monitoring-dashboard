@@ -11,6 +11,7 @@ Responsibilities
 - Interpret the fixed workbook schema
 - Discover departments
 - Discover meters
+- Discover workbook metadata columns (e.g. the Date column)
 - Build a structured engineering workbook model
 
 This module intentionally contains:
@@ -42,6 +43,9 @@ METER_ROW = 1
 
 #: First engineering data row.
 DATA_START_ROW = 2
+
+#: Header value used to identify the workbook's Date column.
+DATE_COLUMN_HEADER = "date"
 
 
 # =============================================================================
@@ -83,6 +87,38 @@ class EngineeringWorkbook:
     data_start_row: int
 
 
+@dataclass(frozen=True)
+class WorkbookColumn:
+    """
+    Represents a workbook metadata column.
+
+    Unlike ``EngineeringMeter``, which models an engineering measurement
+    (e.g. an Air Compressor or PNG meter belonging to a department),
+    ``WorkbookColumn`` models non-measurement workbook metadata such as
+    ID, Start time, Completion time, Email, Name, Last modified time,
+    Date, and Name2 columns.
+
+    Attributes
+    ----------
+    column_name:
+        The canonical (normalized) header value identifying this
+        column, e.g. ``"Date"``.
+    display_name:
+        The header value as it should be displayed to users.
+    column_index:
+        The zero-based positional index of this column within the raw
+        worksheet DataFrame.
+    data_column:
+        The DataFrame column identifier for this column, suitable for
+        indexing into DataFrames returned by the repository.
+    """
+
+    column_name: str
+    display_name: str
+    column_index: int
+    data_column: str
+
+
 # =============================================================================
 # Parser
 # =============================================================================
@@ -104,6 +140,7 @@ class EngineeringParser:
         self._departments: List[EngineeringDepartment] | None = None
         self._meters: List[EngineeringMeter] | None = None
         self._workbook: EngineeringWorkbook | None = None
+        self._date_column: WorkbookColumn | None = None
 
     # -------------------------------------------------------------------------
     # Private Helpers
@@ -199,6 +236,64 @@ class EngineeringParser:
         self._departments = departments
         self._meters = meters
 
+    def _find_header_column(
+        self,
+        header_value: str,
+    ) -> Optional[WorkbookColumn]:
+        """
+        Locate a workbook metadata column by header value.
+
+        Searches only the workbook's header metadata rows (the
+        department header row and the meter header row) for a cell
+        whose normalized value matches ``header_value``. Engineering
+        data rows are never inspected.
+
+        Parameters
+        ----------
+        header_value:
+            The header value to search for. Matching is
+            whitespace-stripped and case-insensitive.
+
+        Returns
+        -------
+        WorkbookColumn | None
+            The matching workbook column, or ``None`` if no header
+            metadata cell matches ``header_value``.
+        """
+        target = header_value.strip().casefold()
+
+        department_headers = self._dataframe.iloc[HEADER_ROW]
+        meter_headers = self._dataframe.iloc[METER_ROW]
+
+        for column_index in range(self._dataframe.shape[1]):
+
+            department_value = self._normalize(
+                department_headers.iloc[column_index]
+            )
+
+            meter_value = self._normalize(
+                meter_headers.iloc[column_index]
+            )
+
+            for candidate in (department_value, meter_value):
+
+                if not candidate:
+                    continue
+
+                if candidate.casefold() != target:
+                    continue
+
+                return WorkbookColumn(
+                    column_name=candidate,
+                    display_name=candidate,
+                    column_index=column_index,
+                    data_column=str(
+                        self._dataframe.columns[column_index]
+                    ),
+                )
+
+        return None
+
     # -------------------------------------------------------------------------
     # Public API
     # -------------------------------------------------------------------------
@@ -270,3 +365,43 @@ class EngineeringParser:
                 return department
 
         return None
+
+    def get_date_column(self) -> WorkbookColumn:
+        """
+        Discover and return the workbook's Date column.
+
+        The Date column is workbook metadata, not an engineering
+        measurement, and is therefore modeled as a ``WorkbookColumn``
+        rather than an ``EngineeringMeter``.
+
+        Discovery is performed dynamically by searching the workbook's
+        header metadata rows (the department header row and the meter
+        header row) for a cell whose normalized value equals ``"date"``
+        (whitespace-stripped, case-insensitive). Excel column letters,
+        column indices, and header positions are never hardcoded, and
+        engineering data rows are never inspected.
+
+        Returns
+        -------
+        WorkbookColumn
+            Metadata describing the workbook's Date column.
+
+        Raises
+        ------
+        ValueError
+            If the workbook does not contain a column whose header
+            matches ``"date"``.
+        """
+        if self._date_column is None:
+
+            date_column = self._find_header_column(DATE_COLUMN_HEADER)
+
+            if date_column is None:
+                raise ValueError(
+                    "Engineering workbook does not contain a Date "
+                    "column."
+                )
+
+            self._date_column = date_column
+
+        return self._date_column
