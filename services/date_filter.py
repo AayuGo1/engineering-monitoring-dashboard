@@ -1,499 +1,346 @@
 """
-date_filter.py
+services/date_filter.py
 
-Single source of truth for all date-based filtering used throughout the
-Engineering Monitoring Dashboard.
+Reusable date filtering service for the Engineering Monitoring Dashboard.
 
-This module is intentionally UI-agnostic and format-agnostic:
-    - No Streamlit
-    - No Plotly
-    - No Excel / workbook loading
-    - No engineering calculations or other business logic
+This module provides generic date filtering utilities that operate on
+already-loaded pandas DataFrames. It is intentionally independent of
+Excel loading, workbook parsing, Streamlit, and business logic.
 
-It operates exclusively on pandas DataFrames that have already been
-extracted and handed to it by upstream services (e.g.
-services/engineering_parser.py). Every method is a pure function: given
-the same input, it always returns the same output, it never mutates the
-caller's DataFrame, and it always returns a copy.
+Responsibilities
+----------------
+- Filter the latest record
+- Filter by calendar day
+- Filter by month and year
+- Filter by date range
+- Discover available years
+- Discover available months
+- Safely convert columns to datetime
+
+This module intentionally contains:
+- No Streamlit
+- No UI
+- No workbook parsing
+- No Excel loading
+- No engineering-specific logic
 """
 
 from __future__ import annotations
 
-import datetime as dt
-from typing import List, Tuple, Union
+from datetime import date
+from typing import List
 
 import pandas as pd
 
-DateLike = Union[str, dt.date, dt.datetime, pd.Timestamp]
-
-
-# =========================================================
-# Exceptions
-# =========================================================
-
-class DateFilterError(Exception):
-    """Base exception for all date_filter errors."""
-
-
-class MissingDateColumnError(DateFilterError):
-    """Raised when the requested date column does not exist in the
-    DataFrame."""
-
-
-class InvalidDateFormatError(DateFilterError):
-    """Raised when a date value (either in the DataFrame or supplied by
-    the caller) cannot be parsed."""
-
-
-class EmptyDataFrameError(DateFilterError):
-    """Raised when the input DataFrame contains no rows, or contains no
-    valid dates after parsing."""
-
-
-class InvalidDateRangeError(DateFilterError):
-    """Raised when a supplied date range is logically invalid (e.g.
-    ``start_date`` is after ``end_date``)."""
-
-
-# =========================================================
-# DateFilter
-# =========================================================
 
 class DateFilter:
     """
-    Collection of static, reusable date-based filtering utilities.
+    Generic date filtering service.
 
-    All methods accept a pandas DataFrame and the name of the column
-    holding date/timestamp values, validate the input, and return a new
-    DataFrame (or derived list) without mutating the original.
+    All methods operate on copies of the supplied DataFrame and never
+    mutate caller-owned data.
     """
 
-    # -----------------------------------------------------
-    # Private helpers
-    # -----------------------------------------------------
+    # ------------------------------------------------------------------
+    # Private Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _ensure_dataframe(dataframe: pd.DataFrame) -> None:
+    def _empty_like(dataframe: pd.DataFrame) -> pd.DataFrame:
         """
-        Validate that the input is a non-empty pandas DataFrame.
+        Return an empty DataFrame preserving the original columns.
 
         Parameters
         ----------
-        dataframe : pd.DataFrame
-            The object to validate.
-
-        Raises
-        ------
-        DateFilterError
-            If ``dataframe`` is not a pandas DataFrame.
-        EmptyDataFrameError
-            If ``dataframe`` contains no rows.
-        """
-        if not isinstance(dataframe, pd.DataFrame):
-            raise DateFilterError(
-                f"Expected a pandas DataFrame, got {type(dataframe).__name__}."
-            )
-        if dataframe.empty:
-            raise EmptyDataFrameError("The provided DataFrame is empty.")
-
-    @staticmethod
-    def _ensure_date_column(dataframe: pd.DataFrame, date_column: str) -> None:
-        """
-        Validate that ``date_column`` exists in ``dataframe``.
-
-        Parameters
-        ----------
-        dataframe : pd.DataFrame
-            The DataFrame to check.
-        date_column : str
-            Name of the expected date column.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is not a column in ``dataframe``.
-        """
-        if date_column not in dataframe.columns:
-            raise MissingDateColumnError(
-                f"Date column '{date_column}' was not found in the DataFrame. "
-                f"Available columns: {list(dataframe.columns)}"
-            )
-
-    @staticmethod
-    def _prepare(dataframe: pd.DataFrame, date_column: str) -> pd.DataFrame:
-        """
-        Validate the DataFrame and date column, then return a working
-        copy with the date column parsed to ``datetime64``.
-
-        Rows whose date value cannot be parsed are dropped from the
-        working copy (they are considered invalid, not fatal, unless
-        this leaves no valid rows at all).
-
-        Parameters
-        ----------
-        dataframe : pd.DataFrame
+        dataframe:
             Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
 
         Returns
         -------
-        pd.DataFrame
-            A copy of ``dataframe`` with ``date_column`` coerced to
-            ``datetime64[ns]`` and invalid dates removed.
-
-        Raises
-        ------
-        EmptyDataFrameError
-            If the DataFrame is empty, or no valid dates remain after
-            parsing.
-        MissingDateColumnError
-            If ``date_column`` is missing.
+        pandas.DataFrame
         """
-        DateFilter._ensure_dataframe(dataframe)
-        DateFilter._ensure_date_column(dataframe, date_column)
-
-        working = dataframe.copy()
-        working[date_column] = pd.to_datetime(working[date_column], errors="coerce")
-        working = working.dropna(subset=[date_column])
-
-        if working.empty:
-            raise EmptyDataFrameError(
-                f"No valid dates found in column '{date_column}' after parsing."
-            )
-
-        return working
+        return dataframe.iloc[0:0].copy()
 
     @staticmethod
-    def _parse_single_date(value: DateLike, label: str = "date") -> pd.Timestamp:
-        """
-        Safely parse a single caller-supplied date-like value.
-
-        Parameters
-        ----------
-        value : DateLike
-            The value to parse (string, date, datetime, or Timestamp).
-        label : str, default "date"
-            Human-readable label used in error messages.
-
-        Returns
-        -------
-        pd.Timestamp
-            The parsed timestamp.
-
-        Raises
-        ------
-        InvalidDateFormatError
-            If ``value`` cannot be parsed into a valid date.
-        """
-        parsed = pd.to_datetime(value, errors="coerce")
-        if pd.isna(parsed):
-            raise InvalidDateFormatError(
-                f"Could not parse {label} value: {value!r}"
-            )
-        return parsed
-
-    # -----------------------------------------------------
-    # Public filtering methods
-    # -----------------------------------------------------
-
-    @staticmethod
-    def filter_by_date(
-        dataframe: pd.DataFrame, date_column: str, date: DateLike
-    ) -> pd.DataFrame:
-        """
-        Return rows matching a single, specific calendar date.
-
-        Parameters
-        ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
-        date : DateLike
-            The target date (string, date, datetime, or Timestamp). Only
-            the calendar-date portion is compared; time-of-day is
-            ignored.
-
-        Returns
-        -------
-        pd.DataFrame
-            Copy of the rows whose date matches ``date``.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
-        InvalidDateFormatError
-            If ``date`` cannot be parsed.
-        """
-        working = DateFilter._prepare(dataframe, date_column)
-        target = DateFilter._parse_single_date(date, label="date").date()
-
-        mask = working[date_column].dt.date == target
-        return working.loc[mask].copy()
-
-    @staticmethod
-    def filter_by_month(
-        dataframe: pd.DataFrame, date_column: str, year: int, month: int
-    ) -> pd.DataFrame:
-        """
-        Return rows belonging to a specific year/month.
-
-        Parameters
-        ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
-        year : int
-            Target calendar year (e.g. 2024).
-        month : int
-            Target calendar month (1-12).
-
-        Returns
-        -------
-        pd.DataFrame
-            Copy of the rows falling within the requested month.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
-        InvalidDateFormatError
-            If ``month`` is not in the range 1-12.
-        """
-        working = DateFilter._prepare(dataframe, date_column)
-
-        if not 1 <= month <= 12:
-            raise InvalidDateFormatError(
-                f"Invalid month: {month!r}. Month must be between 1 and 12."
-            )
-
-        mask = (working[date_column].dt.year == year) & (
-            working[date_column].dt.month == month
-        )
-        return working.loc[mask].copy()
-
-    @staticmethod
-    def filter_by_year(
-        dataframe: pd.DataFrame, date_column: str, year: int
-    ) -> pd.DataFrame:
-        """
-        Return rows belonging to a specific calendar year.
-
-        Parameters
-        ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
-        year : int
-            Target calendar year (e.g. 2024).
-
-        Returns
-        -------
-        pd.DataFrame
-            Copy of the rows falling within the requested year.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
-        """
-        working = DateFilter._prepare(dataframe, date_column)
-        mask = working[date_column].dt.year == year
-        return working.loc[mask].copy()
-
-    @staticmethod
-    def filter_by_range(
+    def _valid_dataframe(
         dataframe: pd.DataFrame,
         date_column: str,
-        start_date: DateLike,
-        end_date: DateLike,
+    ) -> bool:
+        """
+        Validate that the DataFrame contains the requested date column.
+
+        Parameters
+        ----------
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Name of the date column.
+
+        Returns
+        -------
+        bool
+        """
+        return (
+            not dataframe.empty
+            and date_column in dataframe.columns
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def ensure_datetime(
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
     ) -> pd.DataFrame:
         """
-        Return rows within an inclusive date range.
+        Return a copy with the specified column converted to datetime.
+
+        Invalid values become NaT.
 
         Parameters
         ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
-        start_date : DateLike
-            Start of the range (inclusive).
-        end_date : DateLike
-            End of the range (inclusive).
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Date column name.
 
         Returns
         -------
-        pd.DataFrame
-            Copy of the rows whose date falls within
-            ``[start_date, end_date]`` inclusive.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
-        InvalidDateFormatError
-            If ``start_date`` or ``end_date`` cannot be parsed.
-        InvalidDateRangeError
-            If ``start_date`` is later than ``end_date``.
+        pandas.DataFrame
         """
-        working = DateFilter._prepare(dataframe, date_column)
+        if not self._valid_dataframe(dataframe, date_column):
+            return self._empty_like(dataframe)
 
-        start = DateFilter._parse_single_date(start_date, label="start_date")
-        end = DateFilter._parse_single_date(end_date, label="end_date")
+        result = dataframe.copy()
 
-        if start > end:
-            raise InvalidDateRangeError(
-                f"start_date ({start.date()}) must not be later than "
-                f"end_date ({end.date()})."
-            )
-
-        # Normalize to full-day boundaries so the range is inclusive of
-        # the entire end_date, regardless of time-of-day components.
-        start_bound = start.normalize()
-        end_bound = end.normalize() + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
-
-        mask = (working[date_column] >= start_bound) & (
-            working[date_column] <= end_bound
+        result[date_column] = pd.to_datetime(
+            result[date_column],
+            errors="coerce",
         )
-        return working.loc[mask].copy()
 
-    @staticmethod
-    def latest_period(dataframe: pd.DataFrame, date_column: str) -> pd.DataFrame:
+        return result
+
+    def filter_latest(
+        self,
+        dataframe: pd.DataFrame,
+    ) -> pd.DataFrame:
         """
-        Return rows corresponding to the most recent available date.
+        Return the latest record.
+
+        The latest record is the final row of the DataFrame.
 
         Parameters
         ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
+        dataframe:
+            Input DataFrame.
 
         Returns
         -------
-        pd.DataFrame
-            Copy of the rows whose date equals the latest date present
-            in ``date_column``.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
+        pandas.DataFrame
         """
-        working = DateFilter._prepare(dataframe, date_column)
-        latest_date = working[date_column].dt.date.max()
+        if dataframe.empty:
+            return self._empty_like(dataframe)
 
-        mask = working[date_column].dt.date == latest_date
-        return working.loc[mask].copy()
+        return dataframe.iloc[[-1]].copy()
 
-    # -----------------------------------------------------
-    # Public discovery methods
-    # -----------------------------------------------------
-
-    @staticmethod
-    def available_dates(
-        dataframe: pd.DataFrame, date_column: str
-    ) -> List[dt.date]:
+    def filter_day(
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
+        selected_date: date,
+    ) -> pd.DataFrame:
         """
-        Return the sorted list of distinct calendar dates present in
-        the DataFrame.
+        Filter rows matching a calendar day.
 
         Parameters
         ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Date column.
+
+        selected_date:
+            Target date.
 
         Returns
         -------
-        List[datetime.date]
-            Sorted (ascending) list of unique dates.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
+        pandas.DataFrame
         """
-        working = DateFilter._prepare(dataframe, date_column)
-        unique_dates = working[date_column].dt.date.unique()
-        return sorted(unique_dates)
+        df = self.ensure_datetime(
+            dataframe,
+            date_column,
+        )
 
-    @staticmethod
+        if df.empty:
+            return df
+
+        return df.loc[
+            df[date_column].dt.date == selected_date
+        ].copy()
+
+    def filter_month(
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
+        month: int,
+        year: int,
+    ) -> pd.DataFrame:
+        """
+        Filter rows by month and year.
+
+        Parameters
+        ----------
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Date column.
+
+        month:
+            Month number.
+
+        year:
+            Calendar year.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
+        df = self.ensure_datetime(
+            dataframe,
+            date_column,
+        )
+
+        if df.empty:
+            return df
+
+        mask = (
+            (df[date_column].dt.month == month)
+            & (df[date_column].dt.year == year)
+        )
+
+        return df.loc[mask].copy()
+
+    def filter_range(
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
+        start_date: date,
+        end_date: date,
+    ) -> pd.DataFrame:
+        """
+        Filter rows between two dates (inclusive).
+
+        Parameters
+        ----------
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Date column.
+
+        start_date:
+            Inclusive start date.
+
+        end_date:
+            Inclusive end date.
+
+        Returns
+        -------
+        pandas.DataFrame
+        """
+        df = self.ensure_datetime(
+            dataframe,
+            date_column,
+        )
+
+        if df.empty:
+            return df
+
+        mask = (
+            (df[date_column].dt.date >= start_date)
+            & (df[date_column].dt.date <= end_date)
+        )
+
+        return df.loc[mask].copy()
+
+    def available_years(
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
+    ) -> List[int]:
+        """
+        Return sorted available years.
+
+        Parameters
+        ----------
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Date column.
+
+        Returns
+        -------
+        list[int]
+        """
+        df = self.ensure_datetime(
+            dataframe,
+            date_column,
+        )
+
+        if df.empty:
+            return []
+
+        years = (
+            df[date_column]
+            .dropna()
+            .dt.year
+            .drop_duplicates()
+            .sort_values()
+        )
+
+        return years.astype(int).tolist()
+
     def available_months(
-        dataframe: pd.DataFrame, date_column: str
-    ) -> List[Tuple[int, int]]:
+        self,
+        dataframe: pd.DataFrame,
+        date_column: str,
+    ) -> List[int]:
         """
-        Return the sorted list of distinct (year, month) tuples present
-        in the DataFrame.
+        Return sorted available month numbers.
 
         Parameters
         ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
+        dataframe:
+            Input DataFrame.
+
+        date_column:
+            Date column.
 
         Returns
         -------
-        List[Tuple[int, int]]
-            Sorted (ascending) list of unique ``(year, month)`` tuples.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
+        list[int]
         """
-        working = DateFilter._prepare(dataframe, date_column)
-        pairs = set(
-            zip(working[date_column].dt.year, working[date_column].dt.month)
+        df = self.ensure_datetime(
+            dataframe,
+            date_column,
         )
-        return sorted(pairs)
 
-    @staticmethod
-    def available_years(dataframe: pd.DataFrame, date_column: str) -> List[int]:
-        """
-        Return the sorted list of distinct years present in the
-        DataFrame.
+        if df.empty:
+            return []
 
-        Parameters
-        ----------
-        dataframe : pd.DataFrame
-            Source DataFrame.
-        date_column : str
-            Name of the column holding date/timestamp values.
+        months = (
+            df[date_column]
+            .dropna()
+            .dt.month
+            .drop_duplicates()
+            .sort_values()
+        )
 
-        Returns
-        -------
-        List[int]
-            Sorted (ascending) list of unique years.
-
-        Raises
-        ------
-        MissingDateColumnError
-            If ``date_column`` is missing.
-        EmptyDataFrameError
-            If ``dataframe`` is empty or has no valid dates.
-        """
-        working = DateFilter._prepare(dataframe, date_column)
-        unique_years = working[date_column].dt.year.unique()
-        return sorted(int(year) for year in unique_years)
+        return months.astype(int).tolist()
