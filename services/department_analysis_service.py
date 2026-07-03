@@ -11,6 +11,24 @@ metadata. This service only coordinates repository lookups with
 ``DateFilter`` for date-based filtering and ``ConsumptionCalculator``
 for numerical summaries.
 
+Column Label Convention
+------------------------
+``EngineeringRepository`` returns DataFrames whose columns are the
+*original* underlying DataFrame labels (integers, since the workbook
+is loaded with ``header=None``). ``EngineeringParser`` exposes two
+different identifiers for a column:
+
+- ``column_index`` (``int``): the positional index, which also equals
+  the actual DataFrame column label for these frames.
+- ``data_column`` (``str``): a *stringified* version of that same
+  label, intended for display/reference purposes.
+
+Because the underlying DataFrame columns are integers, ``data_column``
+must never be used to index into a DataFrame returned by
+``EngineeringRepository`` (``frame[date_column.data_column]`` fails to
+match, since ``"3" != 3``). This service always indexes DataFrames
+using ``column_index``.
+
 Responsibilities
 ----------------
 - Delegate department and meter lookups to ``EngineeringRepository``.
@@ -195,6 +213,13 @@ class DepartmentAnalysisService:
         never guessed from DataFrame structure (e.g. never
         ``dataframe.columns[0]``), and never duplicated here.
 
+        The resolved column's ``column_index`` (an ``int``) is what is
+        actually used to index into the DataFrame, since
+        ``EngineeringRepository`` returns frames whose columns are the
+        original (integer) DataFrame labels. ``data_column`` (a
+        ``str``) is a display-oriented identifier and is never used
+        for indexing, so the two identifiers are never mixed.
+
         Parameters
         ----------
         department_name:
@@ -237,7 +262,7 @@ class DepartmentAnalysisService:
 
         if mode in ("day", "month", "range"):
             date_column = self._repository.get_date_column()
-            data_column = date_column.data_column
+            data_column = date_column.column_index
 
             if mode == "day":
                 return self._date_filter.filter_day(
