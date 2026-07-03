@@ -190,6 +190,143 @@ class DepartmentAnalysisService:
         dataframe = self.get_department_dataframe(name)
         return self._date_filter.filter_latest(dataframe)
 
+    def get_department_meters(self, department_name: str) -> List[str]:
+        """
+        Return the display names of every meter belonging to a
+        department.
+
+        ``EngineeringRepository`` does not expose a distinctly-named
+        "department meters" lookup; it exposes meter display names via
+        ``get_meter_names()``. This method delegates to that existing
+        API rather than duplicating meter discovery logic, and simply
+        adapts the return type (``list`` instead of ``tuple``) for
+        callers that expect a list.
+
+        Parameters
+        ----------
+        department_name:
+            The department name to look up.
+
+        Returns
+        -------
+        List[str]
+            The display names of the department's meters. Returns an
+            empty list if the department does not exist.
+
+        Raises
+        ------
+        ValueError
+            If the department cannot be found.
+        """
+        return list(self._repository.get_meter_names(department_name))
+
+    def get_meter_names(self, department_name: str) -> tuple[str, ...]:
+        """
+        Return the names of every meter belonging to a department.
+
+        Delegates directly to ``EngineeringRepository``, which already
+        exposes this API.
+
+        Parameters
+        ----------
+        department_name:
+            The department name to look up.
+
+        Returns
+        -------
+        tuple[str, ...]
+            The names of the department's meters. Returns an empty
+            tuple if the department does not exist.
+        """
+        return self._repository.get_meter_names(department_name)
+
+    def get_meter_trend(
+        self,
+        department_name: str,
+        meter_name: str,
+        mode: str = "latest",
+        *,
+        selected_date=None,
+        month=None,
+        year=None,
+        start_date=None,
+        end_date=None,
+    ) -> pd.Series:
+        """
+        Return a single engineering meter's trend, date-filtered.
+
+        Filtering is performed entirely by reusing
+        ``get_filtered_department_data()``: the department DataFrame
+        is filtered exactly as it would be for the Department
+        Analysis view, and the *row labels* that survive that filter
+        are used to select the matching entries out of the meter's
+        full reading series (obtained via
+        ``EngineeringRepository.get_meter_dataframe()``). No
+        ``DateFilter`` logic is duplicated here.
+
+        This row-label alignment relies on
+        ``EngineeringRepository.get_meter_dataframe()`` and
+        ``EngineeringRepository.get_department_dataframe()`` both
+        being derived, without reindexing, from the same underlying
+        engineering data rows: a given row label identifies the same
+        engineering record in either result. That correspondence is
+        an invariant of ``EngineeringRepository``, not something this
+        service re-derives from column values.
+
+        Parameters
+        ----------
+        department_name:
+            The owning department's name.
+        meter_name:
+            The meter name to look up.
+        mode:
+            The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
+            ``"range"``. Any other value returns the meter's
+            unfiltered readings.
+        selected_date:
+            The date to filter by when ``mode`` is ``"day"``.
+        month:
+            The month to filter by when ``mode`` is ``"month"``.
+        year:
+            The year to filter by when ``mode`` is ``"month"``.
+        start_date:
+            The inclusive range start when ``mode`` is ``"range"``.
+        end_date:
+            The inclusive range end when ``mode`` is ``"range"``.
+
+        Returns
+        -------
+        pandas.Series
+            The meter's readings restricted to the filtered date
+            range. Returns an empty series if the meter or the
+            filtered department data have no matching readings.
+
+        Raises
+        ------
+        ValueError
+            If the department or meter cannot be found, or if the
+            repository cannot identify a date column.
+        """
+        meter_series = self.get_meter_dataframe(department_name, meter_name)
+
+        if meter_series.empty:
+            return meter_series
+
+        filtered_dataframe = self.get_filtered_department_data(
+            department_name,
+            mode,
+            selected_date=selected_date,
+            month=month,
+            year=year,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if filtered_dataframe.empty:
+            return meter_series.iloc[0:0]
+
+        return meter_series.loc[filtered_dataframe.index]
+
     def get_filtered_department_data(
         self,
         department_name: str,
