@@ -1,22 +1,18 @@
 """
 pages/overview.py
 
-Production Overview page for the Engineering Monitoring Dashboard.
+Overview content page for the Engineering Monitoring Dashboard.
 
-This page is responsible only for orchestrating reusable UI components and
-consuming the OverviewService backend. It intentionally contains no Excel
-loading, workbook parsing, or engineering calculations.
+This module renders only the Overview page content. Application
+configuration, navigation, sidebar, and navbar are managed by the
+top-level app.py entry point.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import streamlit as st
 
 from components.cards import KPICard
-from components.navbar import render_navbar
-from components.sidebar import render_sidebar
 from services.overview_service import OverviewService
 
 try:
@@ -38,7 +34,9 @@ PAGE_SUBTITLE = "Plant-wide Engineering Monitoring Dashboard"
 
 
 def _render_title() -> None:
-    """Render the page title."""
+    """
+    Render the page title.
+    """
     if HAS_LAYOUT:
         render_page_title(
             PAGE_TITLE,
@@ -68,7 +66,7 @@ def _render_dashboard_status(service: OverviewService) -> None:
     else:
         st.subheader("Dashboard Status")
 
-    cols = (
+    columns = (
         create_columns(4)
         if HAS_LAYOUT
         else st.columns(4)
@@ -93,12 +91,14 @@ def _render_dashboard_status(service: OverviewService) -> None:
         ),
     ]
 
-    for column, (label, value) in zip(cols, metrics):
+    for column, (label, value) in zip(columns, metrics):
         with column:
             st.metric(label, value)
 
 
-def _render_departments(service: OverviewService) -> None:
+def _render_departments(
+    service: OverviewService,
+) -> None:
     """
     Render discovered engineering departments.
 
@@ -233,19 +233,14 @@ def _render_quick_statistics(
             ).render()
 
 
-def render_page() -> None:
+def render_content() -> None:
     """
-    Render the Overview page.
+    Render the Overview page content.
+
+    This function intentionally renders only page content.
+    Application configuration, sidebar, navbar, and routing are handled
+    by the application's top-level entry point.
     """
-    st.set_page_config(
-        page_title="Overview",
-        page_icon="📊",
-        layout="wide",
-    )
-
-    render_sidebar()
-    render_navbar()
-
     if HAS_LAYOUT:
         render_page_container()
 
@@ -273,7 +268,3 @@ def render_page() -> None:
 
     except Exception as exc:
         st.error(f"Unable to load Overview Dashboard: {exc}")
-
-
-if __name__ == "__main__":
-    render_page()
