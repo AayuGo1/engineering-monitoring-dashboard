@@ -21,6 +21,8 @@ This module intentionally contains:
 - No workbook loading
 - No workbook parsing
 - No engineering calculations
+- No DataFrame slicing or column index calculations
+- No department or meter lookup logic
 """
 
 from __future__ import annotations
@@ -32,7 +34,6 @@ import pandas as pd
 
 from services.engineering_parser import (
     EngineeringDepartment,
-    EngineeringMeter,
     EngineeringWorkbook,
 )
 from services.engineering_repository import EngineeringRepository
@@ -64,7 +65,11 @@ class OverviewService:
     """
     Backend service powering the Overview Dashboard.
 
-    This service acts as a lightweight façade over EngineeringRepository.
+    This service is a thin façade over ``EngineeringRepository``. All
+    workbook access — department lookups, meter lookups, and
+    DataFrame/Series retrieval — is delegated to the repository. This
+    class contains no DataFrame slicing, column index calculations,
+    or department/meter discovery logic of its own.
     """
 
     def __init__(self) -> None:
@@ -72,35 +77,6 @@ class OverviewService:
         Initialize the Overview service.
         """
         self._repository = EngineeringRepository()
-
-    # ------------------------------------------------------------------
-    # Private Helpers
-    # ------------------------------------------------------------------
-
-    def _find_meter(
-        self,
-        department_name: str,
-        meter_name: str,
-    ) -> Optional[EngineeringMeter]:
-        """
-        Locate a meter within a department.
-
-        Parameters
-        ----------
-        department_name:
-            Department name.
-
-        meter_name:
-            Meter name.
-
-        Returns
-        -------
-        EngineeringMeter | None
-        """
-        return self._repository.get_meter(
-            department_name,
-            meter_name,
-        )
 
     # ------------------------------------------------------------------
     # Existing Public API (Backward Compatible)
@@ -165,21 +141,7 @@ class OverviewService:
         ValueError
             If the department cannot be found.
         """
-        department = self.get_department(name)
-
-        if department is None:
-            raise ValueError(
-                f"Unknown department: '{name}'."
-            )
-
-        dataframe = self._repository.get_engineering_dataframe()
-
-        column_indices = [
-            meter.column_index
-            for meter in department.meters
-        ]
-
-        return dataframe.iloc[:, column_indices].copy()
+        return self._repository.get_department_dataframe(name)
 
     def get_meter_dataframe(
         self,
@@ -204,22 +166,12 @@ class OverviewService:
         Raises
         ------
         ValueError
-            If the requested meter cannot be found.
+            If the department or meter cannot be found.
         """
-        meter = self._find_meter(
+        return self._repository.get_meter_dataframe(
             department_name,
             meter_name,
         )
-
-        if meter is None:
-            raise ValueError(
-                f"Unknown meter '{meter_name}' "
-                f"in department '{department_name}'."
-            )
-
-        dataframe = self._repository.get_engineering_dataframe()
-
-        return dataframe.iloc[:, meter.column_index].copy()
 
     def get_latest_record(self) -> pd.Series:
         """
@@ -234,14 +186,7 @@ class OverviewService:
         ValueError
             If no engineering records are available.
         """
-        dataframe = self._repository.get_engineering_dataframe()
-
-        if dataframe.empty:
-            raise ValueError(
-                "No engineering records available."
-            )
-
-        return dataframe.iloc[-1].copy()
+        return self._repository.get_latest_record()
 
     # ------------------------------------------------------------------
     # Dashboard Metadata
