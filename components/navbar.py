@@ -308,56 +308,6 @@ def _render_status_cards(status: Dict[str, str]) -> str:
     return html
 
 
-def _render_clock_card() -> str:
-    """
-    Generate HTML/JS for a live, client-side date/time status card.
-
-    The clock updates once per second entirely in the browser via a
-    small inline script; no server round-trip or data source is
-    involved, keeping this module free of business logic.
-
-    Returns
-    -------
-    str
-        HTML fragment containing the live clock card and its script.
-    """
-    return """
-    <div class="emd-status-card">
-        <div class="emd-status-label">Current Date</div>
-        <div class="emd-status-value emd-clock" id="emd-navbar-date">--</div>
-    </div>
-    <div class="emd-status-card">
-        <div class="emd-status-label">Current Time</div>
-        <div class="emd-status-value emd-clock" id="emd-navbar-time">--</div>
-    </div>
-    <script>
-    (function () {
-        function pad(value) {
-            return value.toString().padStart(2, "0");
-        }
-
-        function tick() {
-            var now = new Date();
-            var dateEl = window.parent.document.getElementById("emd-navbar-date");
-            var timeEl = window.parent.document.getElementById("emd-navbar-time");
-
-            if (dateEl) {
-                dateEl.textContent = now.getFullYear() + "-" +
-                    pad(now.getMonth() + 1) + "-" + pad(now.getDate());
-            }
-
-            if (timeEl) {
-                timeEl.textContent = pad(now.getHours()) + ":" +
-                    pad(now.getMinutes()) + ":" + pad(now.getSeconds());
-            }
-        }
-
-        tick();
-        setInterval(tick, 1000);
-    })();
-    </script>
-    """
-
 
 def render_navbar(
     company_name: str = "Company Logo",
@@ -405,7 +355,8 @@ def render_navbar(
         )
     )
 
-    clock_card = _render_clock_card()
+    
+    
 
     st.markdown(
         f"""
@@ -431,7 +382,8 @@ def render_navbar(
                 </div>
 
                 <div class="emd-status">
-                    {clock_card}
+                
+                    
                     {status_cards}
                 </div>
 
