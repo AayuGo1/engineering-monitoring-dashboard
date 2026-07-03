@@ -12,6 +12,25 @@ metadata. This service only coordinates repository lookups with
 for numerical summaries, following the same pattern used by
 ``DepartmentAnalysisService``.
 
+Column Label Convention
+------------------------
+``EngineeringRepository`` returns DataFrames whose columns are the
+*original* underlying DataFrame labels (integers, since the workbook
+is loaded with ``header=None``). ``EngineeringParser`` exposes two
+different identifiers for a column:
+
+- ``column_index`` (``int``): the positional index, which also equals
+  the actual DataFrame column label for these frames.
+- ``data_column`` (``str``): a *stringified* version of that same
+  label, intended for display/reference purposes.
+
+Because the underlying DataFrame columns are integers, ``data_column``
+must never be used to index into a DataFrame returned by
+``EngineeringRepository`` (``frame[date_column.data_column]`` fails to
+match, since ``"3" != 3``). This service always indexes DataFrames —
+for both meters and the Date column — using ``column_index``, so the
+two identifiers are never mixed.
+
 Section Identification
 -----------------------
 ``EngineeringParser`` (and therefore ``EngineeringRepository``) exposes
@@ -229,7 +248,7 @@ class AirCompressorService:
     def _calculate_summary_from_dataframe(
         self,
         dataframe: pd.DataFrame,
-        date_column: str,
+        date_column: int,
     ) -> tuple[
         float | None,
         float | None,
@@ -252,7 +271,8 @@ class AirCompressorService:
             The Air Compressor section's engineering records.
 
         date_column:
-            The Date column's identifier, excluded from iteration.
+            The Date column's ``column_index`` (the actual DataFrame
+            column label), excluded from iteration.
 
         Returns
         -------
@@ -304,7 +324,10 @@ class AirCompressorService:
         ``EngineeringRepository.get_date_column()``, never assumed or
         duplicated here, and the meter column is always resolved
         through ``EngineeringRepository.get_meter()``, never sliced by
-        position.
+        position. Both are indexed into the department DataFrame using
+        their ``column_index`` (the actual DataFrame column label),
+        never their ``data_column`` string, so the two identifiers are
+        never mixed.
 
         Parameters
         ----------
@@ -334,7 +357,10 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The meter's (optionally filtered) readings.
+            The meter's (optionally filtered) readings, indexed by the
+            corresponding engineering Date values so charts built from
+            this Series plot against real dates instead of row
+            numbers.
 
         Raises
         ------
@@ -352,7 +378,7 @@ class AirCompressorService:
             return pd.Series(dtype=float)
 
         date_column = self._repository.get_date_column()
-        date_label = date_column.data_column
+        date_label = date_column.column_index
         meter_label = meter.column_index
 
         subset = department_frame[[meter_label, date_label]].copy()
@@ -376,7 +402,10 @@ class AirCompressorService:
         else:
             filtered = subset
 
-        return filtered[meter_label].reset_index(drop=True)
+        if filtered.empty:
+            return pd.Series(dtype=float)
+
+        return filtered.set_index(date_label)[meter_label]
 
     # ------------------------------------------------------------------
     # Public API
@@ -478,7 +507,7 @@ class AirCompressorService:
                 meter_count=len(department.meters),
             )
 
-        date_label = self._repository.get_date_column().data_column
+        date_label = self._repository.get_date_column().column_index
 
         latest, previous, consumption = (
             self._calculate_summary_from_dataframe(
