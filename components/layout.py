@@ -21,6 +21,13 @@ This module intentionally contains:
 - No calculations
 - No charts
 - No dashboard-specific content
+
+This revision widens the usable content area, adds responsive
+breakpoints, and applies the premium dark/glass typographic treatment,
+while preserving every existing public function name and signature
+(``render_page_container``, ``render_page_title``,
+``render_section_header``, ``render_footer``, ``vertical_space``,
+``create_columns``).
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ import streamlit as st
 
 from components.theme import (
     COLORS,
+    GRADIENTS,
     SPACING,
     TYPOGRAPHY,
     LAYOUT,
@@ -53,12 +61,31 @@ def _inject_layout_styles() -> None:
         f"""
 <style>
 
+html, body, [data-testid="stAppViewContainer"] {{
+    background:{GRADIENTS.app_background};
+}}
+
+.block-container {{
+    max-width:{LAYOUT.content_max_width}px;
+    padding-top:{SPACING.xl}px;
+    padding-bottom:{SPACING.xl}px;
+    padding-left:{LAYOUT.page_padding}px;
+    padding-right:{LAYOUT.page_padding}px;
+    margin:0 auto;
+}}
+
 .emd-page-title {{
     color:{COLORS.text_primary};
     font-size:{TYPOGRAPHY.heading_xl}px;
-    font-weight:{TYPOGRAPHY.weight_bold};
+    font-weight:{TYPOGRAPHY.weight_extrabold};
     font-family:{TYPOGRAPHY.primary_font};
+    letter-spacing:{TYPOGRAPHY.tracking_tight};
     margin-bottom:{SPACING.sm}px;
+    background:{GRADIENTS.brand};
+    -webkit-background-clip:text;
+    background-clip:text;
+    -webkit-text-fill-color:transparent;
+    display:inline-block;
 }}
 
 .emd-page-subtitle {{
@@ -74,13 +101,26 @@ def _inject_layout_styles() -> None:
     font-weight:{TYPOGRAPHY.weight_semibold};
     font-family:{TYPOGRAPHY.primary_font};
     margin-bottom:{SPACING.xs}px;
-}
+    display:flex;
+    align-items:center;
+    gap:{SPACING.sm}px;
+}}
+
+.emd-section-title::before {{
+    content:"";
+    display:inline-block;
+    width:4px;
+    height:{TYPOGRAPHY.heading_sm}px;
+    border-radius:{SPACING.xs}px;
+    background:{GRADIENTS.brand};
+}}
 
 .emd-section-description {{
     color:{COLORS.text_secondary};
     font-size:{TYPOGRAPHY.body_sm}px;
     font-family:{TYPOGRAPHY.primary_font};
     margin-bottom:{SPACING.lg}px;
+    margin-left:{SPACING.md}px;
 }}
 
 .emd-footer {{
@@ -89,10 +129,38 @@ def _inject_layout_styles() -> None:
     font-size:{TYPOGRAPHY.body_sm}px;
     font-family:{TYPOGRAPHY.primary_font};
     padding:{SPACING.xl}px 0;
+    border-top:1px solid {COLORS.glass_border};
+    margin-top:{SPACING.xl}px;
 }}
 
 .emd-page-container {{
     width:100%;
+}}
+
+@media (max-width: {LAYOUT.breakpoint_tablet}px) {{
+    .block-container {{
+        padding-left:{SPACING.lg}px;
+        padding-right:{SPACING.lg}px;
+    }}
+
+    .emd-page-title {{
+        font-size:{TYPOGRAPHY.heading_lg}px;
+    }}
+}}
+
+@media (max-width: {LAYOUT.breakpoint_mobile}px) {{
+    .block-container {{
+        padding-left:{SPACING.md}px;
+        padding-right:{SPACING.md}px;
+    }}
+
+    .emd-page-title {{
+        font-size:{TYPOGRAPHY.heading_md}px;
+    }}
+
+    .emd-page-subtitle {{
+        font-size:{TYPOGRAPHY.body_md}px;
+    }}
 }}
 
 </style>
