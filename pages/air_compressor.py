@@ -4,8 +4,9 @@ pages/air_compressor.py
 Presentation layer for the Air Compressor dashboard.
 
 This page is intentionally UI-only. It consumes reusable project
-components and ChartService without performing any workbook loading,
-engineering calculations, or business logic.
+components, ``AirCompressorService`` for engineering data, and
+``ChartService`` for chart rendering, without performing any workbook
+loading, engineering calculations, or business logic of its own.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from components.cards import KPICard
+from services.air_compressor_service import AirCompressorService
 from services.chart_service import ChartService
 
 try:
@@ -24,9 +26,7 @@ try:
         render_page_title,
         render_section_header,
     )
-
     HAS_LAYOUT = True
-
 except ImportError:
     HAS_LAYOUT = False
 
@@ -50,20 +50,55 @@ def _render_title() -> None:
         st.caption(PAGE_SUBTITLE)
 
 
-def _render_kpis() -> None:
+def _format_value(value: float | None, suffix: str = "") -> str:
     """
-    Render Air Compressor KPI placeholders.
+    Format a numeric KPI value for display.
+
+    Parameters
+    ----------
+    value:
+        The numeric value to format, or ``None``.
+
+    suffix:
+        Optional suffix appended to a formatted value (e.g. a unit).
+
+    Returns
+    -------
+    str
+        ``"--"`` if ``value`` is ``None``, otherwise the value
+        formatted to two decimal places with ``suffix`` appended.
+    """
+    if value is None:
+        return "--"
+
+    return f"{value:,.2f}{suffix}"
+
+
+def _render_kpis(service: AirCompressorService) -> None:
+    """
+    Render Air Compressor KPI cards sourced from ``AirCompressorService``.
+
+    Parameters
+    ----------
+    service:
+        The Air Compressor backend service.
     """
     if HAS_LAYOUT:
         render_section_header("System Overview")
     else:
         st.subheader("System Overview")
 
+    try:
+        summary = service.get_summary()
+    except ValueError as error:
+        st.error(f"Unable to load Air Compressor summary: {error}")
+        return
+
     kpis = [
-        ("Running Hours", "⏱️"),
-        ("Average Pressure", "🌀"),
-        ("Average Flow", "🌬️"),
-        ("Energy Consumption", "⚡"),
+        ("Latest Reading", _format_value(summary.latest_reading), "📈"),
+        ("Previous Reading", _format_value(summary.previous_reading), "📉"),
+        ("Consumption", _format_value(summary.consumption), "⚡"),
+        ("Meter Count", str(summary.meter_count), "🧮"),
     ]
 
     columns = (
@@ -72,11 +107,11 @@ def _render_kpis() -> None:
         else st.columns(4)
     )
 
-    for column, (title, icon) in zip(columns, kpis):
+    for column, (title, value, icon) in zip(columns, kpis):
         with column:
             KPICard(
                 title=title,
-                value="--",
+                value=value,
                 icon=icon,
                 subtitle="",
                 description="",
@@ -84,16 +119,77 @@ def _render_kpis() -> None:
             ).render()
 
 
-def _render_chart(
+def _render_available_meters(service: AirCompressorService) -> None:
+    """
+    Render the list of meters belonging to the Air Compressor section.
+
+    Parameters
+    ----------
+    service:
+        The Air Compressor backend service.
+    """
+    if HAS_LAYOUT:
+        render_section_header("Available Meters")
+    else:
+        st.subheader("Available Meters")
+
+    try:
+        meters = service.get_available_meters()
+    except ValueError as error:
+        st.error(f"Unable to load Air Compressor meters: {error}")
+        return
+
+    if not meters:
+        st.info("No meters found for the Air Compressor section.")
+        return
+
+    st.write(", ".join(meters))
+
+
+def _render_latest_readings(service: AirCompressorService) -> None:
+    """
+    Render the latest Air Compressor engineering record as a table.
+
+    Parameters
+    ----------
+    service:
+        The Air Compressor backend service.
+    """
+    if HAS_LAYOUT:
+        render_section_header("Latest Readings")
+    else:
+        st.subheader("Latest Readings")
+
+    try:
+        latest_readings = service.get_latest_compressor_readings()
+    except ValueError as error:
+        st.error(f"Unable to load latest Air Compressor readings: {error}")
+        return
+
+    if latest_readings.empty:
+        st.info("No Air Compressor readings are available.")
+        return
+
+    st.dataframe(
+        latest_readings,
+        use_container_width=True,
+    )
+
+
+def _render_trend_chart(
     title: str,
+    trend: pd.Series,
 ) -> None:
     """
-    Render an empty chart placeholder.
+    Render a single meter trend chart using ``ChartService``.
 
     Parameters
     ----------
     title:
-        Chart title.
+        Chart title, also used as the section header.
+
+    trend:
+        The meter's (optionally filtered) readings.
     """
     if HAS_LAYOUT:
         render_section_header(title)
@@ -102,10 +198,20 @@ def _render_chart(
 
     chart_service = ChartService()
 
-    figure = chart_service.create_empty_chart(
-        title=title,
-        message="Engineering data not connected.",
-    )
+    if trend is None or trend.empty:
+        figure = chart_service.create_empty_chart(
+            title=title,
+            message="Engineering data not connected.",
+        )
+    else:
+        try:
+            figure = chart_service.create_line_chart(
+                trend,
+                title=title,
+            )
+        except Exception as error:  # noqa: BLE001 - surfaced via st.error
+            st.error(f"Unable to render '{title}' chart: {error}")
+            return
 
     st.plotly_chart(
         figure,
@@ -113,55 +219,37 @@ def _render_chart(
     )
 
 
-def _render_compressor_status() -> None:
+def _render_meter_trend(
+    service: AirCompressorService,
+    title: str,
+    getter_name: str,
+) -> None:
     """
-    Render compressor status cards.
+    Resolve a meter trend from the service and render it as a chart.
+
+    Parameters
+    ----------
+    service:
+        The Air Compressor backend service.
+
+    title:
+        Chart title, also used as the section header.
+
+    getter_name:
+        Name of the ``AirCompressorService`` method used to fetch the
+        trend (e.g. ``"get_pressure_trend"``).
     """
-    if HAS_LAYOUT:
-        render_section_header("Compressor Status")
-    else:
-        st.subheader("Compressor Status")
+    try:
+        trend = getattr(service, getter_name)()
+    except ValueError as error:
+        if HAS_LAYOUT:
+            render_section_header(title)
+        else:
+            st.subheader(title)
+        st.error(f"Unable to load '{title}' data: {error}")
+        return
 
-    compressors = [
-        "Compressor A",
-        "Compressor B",
-        "Compressor C",
-        "Compressor D",
-    ]
-
-    columns = (
-        create_columns(4)
-        if HAS_LAYOUT
-        else st.columns(4)
-    )
-
-    for column, compressor in zip(columns, compressors):
-        with column:
-            with st.container(border=True):
-                st.markdown(f"### {compressor}")
-                st.metric(
-                    "Status",
-                    "--",
-                )
-
-
-def _render_recent_events() -> None:
-    """
-    Render the recent events placeholder.
-    """
-    if HAS_LAYOUT:
-        render_section_header("Recent Events")
-    else:
-        st.subheader("Recent Events")
-
-    st.info(
-        "Recent Air Compressor event logs will appear here."
-    )
-
-    st.dataframe(
-        pd.DataFrame(),
-        use_container_width=True,
-    )
+    _render_trend_chart(title, trend)
 
 
 def render_content() -> None:
@@ -170,23 +258,42 @@ def render_content() -> None:
     """
     _render_title()
 
-    _render_kpis()
+    service = AirCompressorService()
 
+    _render_kpis(service)
     st.divider()
 
-    _render_chart("Pressure Trend")
-
+    _render_available_meters(service)
     st.divider()
 
-    _render_chart("Flow Trend")
-
+    _render_latest_readings(service)
     st.divider()
 
-    _render_compressor_status()
-
+    _render_meter_trend(service, "Pressure Trend", "get_pressure_trend")
     st.divider()
 
-    _render_recent_events()
+    _render_meter_trend(service, "Air Flow Trend", "get_flow_trend")
+    st.divider()
+
+    _render_meter_trend(
+        service,
+        "Energy Consumption Trend",
+        "get_energy_consumption_trend",
+    )
+    st.divider()
+
+    _render_meter_trend(
+        service,
+        "Running Hours Trend",
+        "get_running_hours_trend",
+    )
+    st.divider()
+
+    _render_meter_trend(
+        service,
+        "Running Load Trend",
+        "get_running_load_trend",
+    )
 
     if HAS_LAYOUT:
         render_footer()
