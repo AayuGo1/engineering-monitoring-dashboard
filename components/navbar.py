@@ -16,25 +16,50 @@ Responsibilities
 This module intentionally contains:
 - No business logic
 - No Excel integration
-- No live clock
 - No KPI rendering
+
+This revision upgrades the navbar to a premium glass panel with
+brand-gradient logo, a client-side live clock (pure JS, no server
+round-trip, so it never touches business logic or data sources), and
+color-coded status badges, while preserving the existing
+``render_navbar(...)`` signature and default values so every existing
+call site keeps working unmodified.
 """
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Tuple
 
 import streamlit as st
 
 from components.theme import (
     ANIMATION,
     COLORS,
+    GRADIENTS,
     LAYOUT,
     RADIUS,
     SHADOWS,
     SPACING,
     TYPOGRAPHY,
 )
+
+
+#: Keywords that map a status placeholder's text to a badge tone.
+#: Purely presentational — this does not interpret or validate the
+#: underlying status, it only chooses a color for known keywords and
+#: otherwise falls back to a neutral tone.
+_STATUS_TONE_KEYWORDS: Dict[str, Tuple[str, str]] = {
+    "online": (COLORS.success, COLORS.glow_success),
+    "connected": (COLORS.success, COLORS.glow_success),
+    "ok": (COLORS.success, COLORS.glow_success),
+    "active": (COLORS.success, COLORS.glow_success),
+    "warning": (COLORS.warning, COLORS.glow_warning),
+    "degraded": (COLORS.warning, COLORS.glow_warning),
+    "offline": (COLORS.danger, COLORS.glow_danger),
+    "disconnected": (COLORS.danger, COLORS.glow_danger),
+    "error": (COLORS.danger, COLORS.glow_danger),
+    "failed": (COLORS.danger, COLORS.glow_danger),
+}
 
 
 def _inject_navbar_styles() -> None:
@@ -49,13 +74,28 @@ def _inject_navbar_styles() -> None:
         <style>
 
         .emd-navbar {{
+            position:relative;
             width: 100%;
-            background: {COLORS.surface};
-            border: 1px solid {COLORS.border};
+            background: {COLORS.glass_surface};
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid {COLORS.glass_border};
             border-radius: {RADIUS.extra_large}px;
             padding: {SPACING.lg}px {LAYOUT.card_padding}px;
-            box-shadow: {SHADOWS.medium};
+            box-shadow: {SHADOWS.glass};
             margin-bottom: {SPACING.xl}px;
+            overflow: hidden;
+        }}
+
+        .emd-navbar::before {{
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: {GRADIENTS.accent_line};
+            opacity: 0.9;
         }}
 
         .emd-navbar-row {{
@@ -73,20 +113,21 @@ def _inject_navbar_styles() -> None:
         }}
 
         .emd-logo {{
-            width: 48px;
-            height: 48px;
+            width: 52px;
+            height: 52px;
             border-radius: {RADIUS.large}px;
-            border: 1px solid {COLORS.border};
-            background: {COLORS.card};
+            border: 1px solid {COLORS.glass_border};
+            background: {GRADIENTS.brand};
             display:flex;
             align-items:center;
             justify-content:center;
-            font-size:{TYPOGRAPHY.body_lg}px;
-            transition: all {ANIMATION.transition_speed};
+            font-size:{TYPOGRAPHY.heading_sm}px;
+            box-shadow: {SHADOWS.glow};
+            transition: transform {ANIMATION.transition_speed} {ANIMATION.easing};
         }}
 
         .emd-logo:hover {{
-            transform: scale({ANIMATION.hover_scale});
+            transform: scale({ANIMATION.hover_scale_strong}) rotate(-2deg);
         }}
 
         .emd-title {{
@@ -102,6 +143,8 @@ def _inject_navbar_styles() -> None:
             font-size: {TYPOGRAPHY.body_sm}px;
             font-weight: {TYPOGRAPHY.weight_medium};
             font-family: {TYPOGRAPHY.primary_font};
+            letter-spacing: {TYPOGRAPHY.tracking_wide};
+            text-transform: uppercase;
         }}
 
         .emd-status {{
@@ -113,37 +156,83 @@ def _inject_navbar_styles() -> None:
 
         .emd-status-card {{
             background:{COLORS.card};
-            border:1px solid {COLORS.border};
+            border:1px solid {COLORS.glass_border};
             border-radius:{RADIUS.medium}px;
             padding:{SPACING.sm}px {SPACING.md}px;
             min-width:130px;
-            transition:all {ANIMATION.transition_speed};
+            transition:transform {ANIMATION.transition_fast} {ANIMATION.easing},
+                       box-shadow {ANIMATION.transition_fast} {ANIMATION.easing},
+                       border-color {ANIMATION.transition_fast} {ANIMATION.easing};
         }}
 
         .emd-status-card:hover {{
-            transform:scale({ANIMATION.hover_scale});
+            transform:translateY(-2px) scale({ANIMATION.hover_scale});
             box-shadow:{SHADOWS.light};
+            border-color:{COLORS.glass_border_active};
         }}
 
         .emd-status-label {{
             color:{COLORS.text_muted};
-            font-size:{TYPOGRAPHY.body_xs}px;
+            font-size:{TYPOGRAPHY.body_xxs}px;
             font-weight:{TYPOGRAPHY.weight_medium};
             font-family:{TYPOGRAPHY.primary_font};
+            letter-spacing:{TYPOGRAPHY.tracking_wide};
+            text-transform:uppercase;
         }}
 
         .emd-status-value {{
+            display:flex;
+            align-items:center;
+            gap:6px;
             color:{COLORS.text_primary};
             font-size:{TYPOGRAPHY.body_sm}px;
             font-weight:{TYPOGRAPHY.weight_semibold};
-            font-family:{TYPOGRAPHY.primary_font};
+            font-family:{TYPOGRAPHY.mono_font};
             margin-top:2px;
+        }}
+
+        .emd-status-dot {{
+            display:inline-block;
+            width:8px;
+            height:8px;
+            border-radius:{RADIUS.pill}px;
+            flex:0 0 auto;
+        }}
+
+        .emd-status-value.emd-clock {{
+            font-variant-numeric: tabular-nums;
         }}
 
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _resolve_tone(value: str) -> Tuple[str, str]:
+    """
+    Resolve a status badge's dot/glow color for a placeholder value.
+
+    Parameters
+    ----------
+    value:
+        The status text to inspect (e.g. ``"Online"``, ``"--"``).
+
+    Returns
+    -------
+    tuple[str, str]
+        A ``(dot_color, glow_color)`` pair. Falls back to a neutral
+        tone (``COLORS.text_muted`` / no glow) when the text does not
+        match any known keyword, which is always the case for the
+        ``"--"`` placeholder used before real data is wired in.
+    """
+    lowered = value.strip().lower()
+
+    for keyword, tone in _STATUS_TONE_KEYWORDS.items():
+        if keyword in lowered:
+            return tone
+
+    return COLORS.text_muted, "transparent"
 
 
 def _status_items(
@@ -172,11 +261,13 @@ def _status_items(
     Returns
     -------
     dict
-        Ordered mapping of status labels to placeholder values.
+        Ordered mapping of status labels to placeholder values. The
+        "Current Date" / "Current Time" entries are rendered by a
+        client-side live clock rather than a static value, so they
+        are intentionally omitted here and handled separately by
+        ``_render_clock_card``.
     """
     return {
-        "Current Date": "--",
-        "Current Time": "--",
         "Plant Status": plant_status,
         "Excel Status": excel_status,
         "GitHub Status": github_status,
@@ -201,14 +292,71 @@ def _render_status_cards(status: Dict[str, str]) -> str:
     html = ""
 
     for label, value in status.items():
+        dot_color, glow_color = _resolve_tone(value)
+
         html += f"""
         <div class="emd-status-card">
             <div class="emd-status-label">{label}</div>
-            <div class="emd-status-value">{value}</div>
+            <div class="emd-status-value">
+                <span class="emd-status-dot" style="background:{dot_color};
+                    box-shadow:0 0 8px {glow_color};"></span>
+                {value}
+            </div>
         </div>
         """
 
     return html
+
+
+def _render_clock_card() -> str:
+    """
+    Generate HTML/JS for a live, client-side date/time status card.
+
+    The clock updates once per second entirely in the browser via a
+    small inline script; no server round-trip or data source is
+    involved, keeping this module free of business logic.
+
+    Returns
+    -------
+    str
+        HTML fragment containing the live clock card and its script.
+    """
+    return """
+    <div class="emd-status-card">
+        <div class="emd-status-label">Current Date</div>
+        <div class="emd-status-value emd-clock" id="emd-navbar-date">--</div>
+    </div>
+    <div class="emd-status-card">
+        <div class="emd-status-label">Current Time</div>
+        <div class="emd-status-value emd-clock" id="emd-navbar-time">--</div>
+    </div>
+    <script>
+    (function () {
+        function pad(value) {
+            return value.toString().padStart(2, "0");
+        }
+
+        function tick() {
+            var now = new Date();
+            var dateEl = window.parent.document.getElementById("emd-navbar-date");
+            var timeEl = window.parent.document.getElementById("emd-navbar-time");
+
+            if (dateEl) {
+                dateEl.textContent = now.getFullYear() + "-" +
+                    pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+            }
+
+            if (timeEl) {
+                timeEl.textContent = pad(now.getHours()) + ":" +
+                    pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+            }
+        }
+
+        tick();
+        setInterval(tick, 1000);
+    })();
+    </script>
+    """
 
 
 def render_navbar(
@@ -257,6 +405,8 @@ def render_navbar(
         )
     )
 
+    clock_card = _render_clock_card()
+
     st.markdown(
         f"""
         <div class="emd-navbar">
@@ -281,6 +431,7 @@ def render_navbar(
                 </div>
 
                 <div class="emd-status">
+                    {clock_card}
                     {status_cards}
                 </div>
 
