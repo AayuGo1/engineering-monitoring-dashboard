@@ -13,18 +13,25 @@ Responsibilities
 - Persist navigation using Streamlit session_state.
 - Highlight the active page.
 - Consume centralized design tokens from components.theme.
+
+This revision groups navigation items into collapsible sections,
+strengthens the active-page indicator, and adds hover animation and
+glass styling, while preserving the existing public surface
+(``SidebarItem``, ``NAVIGATION_ITEMS``, ``SESSION_KEY``,
+``render_sidebar() -> str``) so callers keep working unmodified.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List
 
 import streamlit as st
 
 from components.theme import (
     ANIMATION,
     COLORS,
+    GRADIENTS,
     LAYOUT,
     RADIUS,
     SHADOWS,
@@ -72,6 +79,29 @@ NAVIGATION_ITEMS: List[SidebarItem] = [
 
 SESSION_KEY = "selected_page"
 
+#: Grouping of navigation labels into collapsible sections. Purely a
+#: presentation concern: it only reorganizes ``NAVIGATION_ITEMS`` into
+#: labeled, collapsible groups and never changes which pages exist or
+#: how navigation state is stored. Any label not listed here falls
+#: back into the "More" group, so adding a new ``NAVIGATION_ITEMS``
+#: entry never breaks rendering.
+_NAVIGATION_GROUPS: Dict[str, List[str]] = {
+    "Modules": [
+        "Home",
+        "Overview",
+        "Department Analysis",
+        "Air Compressor",
+        "Freon Monitoring",
+    ],
+    "System": [
+        "Settings",
+    ],
+}
+
+#: Session-state key prefix used to persist each group's expanded /
+#: collapsed state independently.
+_GROUP_STATE_PREFIX = "sidebar_group_expanded_"
+
 
 # =============================================================================
 # Styling
@@ -90,12 +120,12 @@ def _inject_sidebar_styles() -> None:
         <style>
 
         section[data-testid="stSidebar"] {{
-            background: {COLORS.background};
-            border-right: 1px solid {COLORS.border};
+            background: {COLORS.background_deep};
+            border-right: 1px solid {COLORS.glass_border};
         }}
 
         section[data-testid="stSidebar"] > div:first-child {{
-            padding: {LAYOUT.page_padding}px;
+            padding: {LAYOUT.page_padding}px {SPACING.lg}px;
         }}
 
         .emd-sidebar-title {{
@@ -103,7 +133,29 @@ def _inject_sidebar_styles() -> None:
             font-size: {TYPOGRAPHY.heading_sm}px;
             font-weight: {TYPOGRAPHY.weight_bold};
             font-family: {TYPOGRAPHY.primary_font};
-            margin-bottom: {SPACING.xl}px;
+            margin-bottom: {SPACING.lg}px;
+            display:flex;
+            align-items:center;
+            gap:{SPACING.sm}px;
+        }}
+
+        .emd-sidebar-title::before {{
+            content:"";
+            display:inline-block;
+            width:4px;
+            height:{TYPOGRAPHY.heading_sm}px;
+            border-radius:{SPACING.xs}px;
+            background:{GRADIENTS.brand};
+        }}
+
+        .emd-sidebar-group-label {{
+            color: {COLORS.text_muted};
+            font-size: {TYPOGRAPHY.body_xxs}px;
+            font-weight: {TYPOGRAPHY.weight_semibold};
+            font-family: {TYPOGRAPHY.primary_font};
+            letter-spacing: {TYPOGRAPHY.tracking_wide};
+            text-transform: uppercase;
+            margin: {SPACING.md}px 0 {SPACING.xs}px 4px;
         }}
 
         div.stButton > button {{
@@ -113,18 +165,21 @@ def _inject_sidebar_styles() -> None:
             align-items: center;
             gap: {SPACING.md}px;
 
-            background: {COLORS.card};
-            color: {COLORS.text_primary};
+            background: {COLORS.glass_surface};
+            color: {COLORS.text_secondary};
 
-            border: 1px solid {COLORS.border};
+            border: 1px solid transparent;
             border-radius: {RADIUS.large}px;
 
             padding: {SPACING.md}px;
             margin-bottom: {SPACING.sm}px;
 
-            box-shadow: {SHADOWS.light};
+            box-shadow: none;
 
-            transition: all {ANIMATION.transition_speed};
+            transition: transform {ANIMATION.transition_fast} {ANIMATION.easing},
+                        background {ANIMATION.transition_fast} {ANIMATION.easing},
+                        border-color {ANIMATION.transition_fast} {ANIMATION.easing},
+                        box-shadow {ANIMATION.transition_fast} {ANIMATION.easing};
 
             font-family: {TYPOGRAPHY.primary_font};
             font-size: {TYPOGRAPHY.body_md}px;
@@ -132,9 +187,10 @@ def _inject_sidebar_styles() -> None:
         }}
 
         div.stButton > button:hover {{
-            transform: scale({ANIMATION.hover_scale});
-            border-color: {COLORS.primary};
-            box-shadow: {SHADOWS.medium};
+            transform: translateX(3px) scale({ANIMATION.hover_scale});
+            border-color: {COLORS.glass_border_active};
+            box-shadow: {SHADOWS.light};
+            color: {COLORS.text_primary};
         }}
 
         div.stButton > button:focus {{
@@ -192,6 +248,47 @@ def _get_selected_page() -> str:
     return st.session_state[SESSION_KEY]
 
 
+def _group_for_label(label: str) -> str:
+    """
+    Resolve which navigation group a page label belongs to.
+
+    Parameters
+    ----------
+    label:
+        A navigation item's label.
+
+    Returns
+    -------
+    str
+        The owning group name, or ``"More"`` if the label was not
+        explicitly grouped.
+    """
+    for group_name, labels in _NAVIGATION_GROUPS.items():
+        if label in labels:
+            return group_name
+
+    return "More"
+
+
+def _grouped_navigation_items() -> Dict[str, List[SidebarItem]]:
+    """
+    Partition ``NAVIGATION_ITEMS`` into their configured groups.
+
+    Returns
+    -------
+    dict[str, list[SidebarItem]]
+        Mapping of group name to the navigation items belonging to
+        it, preserving ``NAVIGATION_ITEMS`` order within each group.
+    """
+    grouped: Dict[str, List[SidebarItem]] = {}
+
+    for item in NAVIGATION_ITEMS:
+        group_name = _group_for_label(item.label)
+        grouped.setdefault(group_name, []).append(item)
+
+    return grouped
+
+
 # =============================================================================
 # Rendering Helpers
 # =============================================================================
@@ -210,7 +307,7 @@ def _render_navigation_item(item: SidebarItem, active: bool) -> None:
         Whether the item is currently active.
     """
 
-    indicator = "● " if active else ""
+    indicator = "● " if active else "○ "
 
     label = f"{indicator}{item.icon}  {item.label}"
 
@@ -218,22 +315,47 @@ def _render_navigation_item(item: SidebarItem, active: bool) -> None:
         label,
         key=f"sidebar_{item.label}",
         use_container_width=True,
+        type="primary" if active else "secondary",
     ):
         _set_selected_page(item.label)
 
 
 def _render_navigation() -> None:
     """
-    Render all navigation items dynamically.
+    Render all navigation items dynamically, grouped into
+    collapsible sections.
+
+    Groups with more than one item are rendered inside an expander so
+    the sidebar stays compact as more pages are added; single-item
+    groups (e.g. "System") render directly without an expander to
+    avoid an unnecessary extra click for a lone destination.
     """
 
     selected = _get_selected_page()
+    grouped_items = _grouped_navigation_items()
 
-    for item in NAVIGATION_ITEMS:
-        _render_navigation_item(
-            item=item,
-            active=item.label == selected,
-        )
+    for group_name, items in grouped_items.items():
+        if len(items) > 1:
+            state_key = f"{_GROUP_STATE_PREFIX}{group_name}"
+            is_expanded = st.session_state.get(state_key, True)
+
+            with st.expander(group_name, expanded=is_expanded):
+                for item in items:
+                    _render_navigation_item(
+                        item=item,
+                        active=item.label == selected,
+                    )
+        else:
+            st.markdown(
+                f'<div class="emd-sidebar-group-label">{group_name}</div>',
+                unsafe_allow_html=True,
+            )
+
+            for item in items:
+                _render_navigation_item(
+                    item=item,
+                    active=item.label == selected,
+                )
 
 
 # =============================================================================
