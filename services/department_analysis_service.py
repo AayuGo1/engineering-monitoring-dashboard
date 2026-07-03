@@ -186,16 +186,14 @@ class DepartmentAnalysisService:
         """
         Return filtered department data.
 
-        ``"latest"`` filtering is supported directly, since it does
-        not require a date column. Date-based filtering (``"day"``,
-        ``"month"``, ``"range"``) is not currently supported: the
-        department DataFrame returned by
-        ``EngineeringRepository.get_department_dataframe()`` contains
-        only engineering meter columns and does not include the
-        workbook Date column, so ``DateFilter`` cannot be applied to
-        it for these modes. This limitation is surfaced explicitly
-        via ``ValueError`` rather than worked around by guessing,
-        merging, or reconstructing a date-aware DataFrame here.
+        The department DataFrame is obtained from
+        ``EngineeringRepository.get_department_dataframe()``, which
+        always includes the workbook Date column alongside the
+        department's meter columns. The Date column identifier used
+        for filtering is always resolved through
+        ``EngineeringRepository.get_date_column()`` — never assumed,
+        never guessed from DataFrame structure (e.g. never
+        ``dataframe.columns[0]``), and never duplicated here.
 
         Parameters
         ----------
@@ -224,16 +222,8 @@ class DepartmentAnalysisService:
         Raises
         ------
         ValueError
-            If a date-based filter mode (``"day"``, ``"month"``, or
-            ``"range"``) is requested. The department DataFrame
-            returned by ``EngineeringRepository.get_department_dataframe()``
-            contains only engineering meter columns and intentionally
-            excludes the workbook Date column, so ``DateFilter``
-            cannot be applied to it for these modes. Date filtering
-            for these modes will remain unavailable until
-            ``EngineeringRepository`` exposes a date-aware engineering
-            DataFrame (i.e. one that includes both the Date column and
-            the department's meter columns).
+            If the department cannot be found, or if the repository
+            cannot identify a date column.
         """
         dataframe = self.get_department_dataframe(department_name)
 
@@ -246,11 +236,29 @@ class DepartmentAnalysisService:
             return self._date_filter.filter_latest(dataframe)
 
         if mode in ("day", "month", "range"):
-            raise ValueError(
-                "Date filtering is currently unavailable because the "
-                "department DataFrame does not include the workbook Date column. "
-                "EngineeringRepository must expose a date-aware engineering "
-                "DataFrame before date filtering can be performed."
+            date_column = self._repository.get_date_column()
+            data_column = date_column.data_column
+
+            if mode == "day":
+                return self._date_filter.filter_day(
+                    dataframe,
+                    data_column,
+                    selected_date,
+                )
+
+            if mode == "month":
+                return self._date_filter.filter_month(
+                    dataframe,
+                    data_column,
+                    month,
+                    year,
+                )
+
+            return self._date_filter.filter_range(
+                dataframe,
+                data_column,
+                start_date,
+                end_date,
             )
 
         return dataframe.copy()
