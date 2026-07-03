@@ -15,13 +15,17 @@ It intentionally contains:
 - No DataFrame manipulation
 - No parser interaction
 - No repository access
+
+No sidebar, navbar, footer, or ``st.set_page_config()`` is rendered
+here: those are owned elsewhere in the app.
 """
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict
+from typing import Any, Dict, List
 
+import pandas as pd
 import streamlit as st
 
 from components.cards import KPICard
@@ -29,7 +33,6 @@ from components.cards import KPICard
 try:
     from components.layout import (
         create_columns,
-        render_footer,
         render_page_container,
         render_page_title,
         render_section_header,
@@ -50,20 +53,15 @@ PAGE_TITLE = "Department Analysis"
 PAGE_SUBTITLE = "Department-wise Engineering Analysis"
 
 #: Options presented in the filter mode selector, mapped to the mode
-#: values expected by ``DepartmentAnalysisService.get_filtered_department_data()``.
+#: values expected by
+#: ``DepartmentAnalysisService.get_filtered_department_data()`` and
+#: the department's meter trend lookup.
 FILTER_MODE_OPTIONS: Dict[str, str] = {
     "Latest": "latest",
     "Day": "day",
     "Month": "month",
     "Range": "range",
 }
-
-#: Titles for the placeholder trend charts rendered until real trend
-#: data is exposed by the backend services.
-PLACEHOLDER_CHART_TITLES: tuple[str, ...] = (
-    "Consumption Trend",
-    "Meter Comparison",
-)
 
 
 def _render_title() -> None:
@@ -95,7 +93,8 @@ def _select_department(
     Returns
     -------
     str | None
-        Selected department name.
+        Selected department name, or ``None`` if no departments are
+        available.
     """
     departments = service.get_departments()
 
@@ -120,14 +119,116 @@ def _select_department(
     return None
 
 
+def _get_department_meters(
+    service: DepartmentAnalysisService,
+    department_name: str,
+) -> List[str]:
+    """
+    Return the display names of meters belonging to a department.
+
+    Delegates entirely to ``DepartmentAnalysisService``; this function
+    performs no meter discovery of its own. Supports either a
+    ``get_department_meters()`` or ``get_meter_names()`` method,
+    whichever the service exposes, so this page keeps working
+    regardless of which naming convention the service settled on.
+
+    Parameters
+    ----------
+    service:
+        Department analysis service.
+
+    department_name:
+        The department whose meters should be listed.
+
+    Returns
+    -------
+    List[str]
+        Display names of the department's meters. Empty if none are
+        available.
+
+    Raises
+    ------
+    ValueError
+        If the service raises ``ValueError`` while resolving meters.
+    """
+    if hasattr(service, "get_department_meters"):
+        return list(service.get_department_meters(department_name))
+
+    if hasattr(service, "get_meter_names"):
+        return list(service.get_meter_names(department_name))
+
+    return []
+
+
+def _get_meter_trend(
+    service: DepartmentAnalysisService,
+    department_name: str,
+    meter_name: str,
+    filters: Dict[str, Any],
+) -> pd.Series:
+    """
+    Return a meter's (optionally filtered) trend for a department.
+
+    Delegates entirely to ``DepartmentAnalysisService``; this function
+    performs no filtering or calculation of its own. Supports either a
+    ``get_meter_trend()`` or ``get_department_meter_trend()`` method,
+    whichever the service exposes.
+
+    Parameters
+    ----------
+    service:
+        Department analysis service.
+
+    department_name:
+        The department the meter belongs to.
+
+    meter_name:
+        The target meter's display name.
+
+    filters:
+        Filter parameters collected from ``_render_filter_controls()``.
+
+    Returns
+    -------
+    pandas.Series
+        The meter's engineering readings.
+
+    Raises
+    ------
+    ValueError
+        If the service raises ``ValueError`` while resolving the
+        trend.
+    """
+    if hasattr(service, "get_meter_trend"):
+        return service.get_meter_trend(
+            department_name,
+            meter_name,
+            **filters,
+        )
+
+    if hasattr(service, "get_department_meter_trend"):
+        return service.get_department_meter_trend(
+            department_name,
+            meter_name,
+            **filters,
+        )
+
+    raise ValueError(
+        "DepartmentAnalysisService does not expose a meter trend "
+        "lookup method."
+    )
+
+
 def _render_filter_controls() -> Dict[str, Any]:
     """
-    Render date filter controls for the department data table.
+    Render date filter controls shared by the data table and trend
+    chart.
 
     This function only collects user input; it never filters or
     inspects any DataFrame itself. The returned parameters are passed
     directly into
-    ``DepartmentAnalysisService.get_filtered_department_data()``.
+    ``DepartmentAnalysisService.get_filtered_department_data()`` and
+    the meter trend lookup.
 
     Returns
     -------
@@ -140,7 +241,7 @@ def _render_filter_controls() -> Dict[str, Any]:
     if HAS_LAYOUT:
         render_section_header(
             "Filter Controls",
-            "Choose how the department data table below is filtered.",
+            "Choose how the department data below is filtered.",
         )
     else:
         st.subheader("Filter Controls")
@@ -210,6 +311,49 @@ def _render_filter_controls() -> Dict[str, Any]:
     return filters
 
 
+def _select_meter(
+    service: DepartmentAnalysisService,
+    department_name: str,
+) -> str | None:
+    """
+    Render the meter selector for the selected department.
+
+    Parameters
+    ----------
+    service:
+        Department analysis service.
+
+    department_name:
+        Selected department.
+
+    Returns
+    -------
+    str | None
+        Selected meter display name, or ``None`` if no meters are
+        available for the department.
+    """
+    if HAS_LAYOUT:
+        render_section_header("Meter Selection")
+    else:
+        st.subheader("Meter Selection")
+
+    try:
+        meters = _get_department_meters(service, department_name)
+    except ValueError as exc:
+        st.info(str(exc))
+        return None
+
+    if not meters:
+        st.info("No meters available for the selected department.")
+        return None
+
+    return st.selectbox(
+        "Meter",
+        options=meters,
+        key="department_analysis_meter",
+    )
+
+
 def _render_summary(
     service: DepartmentAnalysisService,
     department_name: str,
@@ -225,7 +369,10 @@ def _render_summary(
     department_name:
         Selected department.
     """
-    render_section_header("Department Summary")
+    if HAS_LAYOUT:
+        render_section_header("Department Summary")
+    else:
+        st.subheader("Department Summary")
 
     summary = service.get_department_summary(
         department_name
@@ -296,7 +443,10 @@ def _render_latest_record(
     department_name:
         Selected department.
     """
-    render_section_header("Latest Department Record")
+    if HAS_LAYOUT:
+        render_section_header("Latest Department Record")
+    else:
+        st.subheader("Latest Department Record")
 
     try:
         latest = service.get_latest_department_data(
@@ -336,7 +486,10 @@ def _render_department_data(
     filters:
         Filter parameters collected from ``_render_filter_controls()``.
     """
-    render_section_header("Department Data")
+    if HAS_LAYOUT:
+        render_section_header("Department Data")
+    else:
+        st.subheader("Department Data")
 
     try:
         dataframe = service.get_filtered_department_data(
@@ -360,33 +513,78 @@ def _render_department_data(
         st.info(str(exc))
 
 
-def _render_charts() -> None:
+def _render_meter_trend(
+    service: DepartmentAnalysisService,
+    department_name: str,
+    meter_name: str | None,
+    filters: Dict[str, Any],
+) -> None:
     """
-    Render placeholder department trend charts.
+    Render the selected meter's trend chart using ``ChartService``.
 
-    Figures are produced exclusively through
-    ``ChartService.create_empty_chart()``; this function never
-    constructs Plotly figures manually. Placeholder charts are shown
-    until real department trend APIs are exposed by the backend
-    services.
+    Trend data is obtained entirely through
+    ``DepartmentAnalysisService``; this function never constructs
+    Plotly figures manually and never filters or transforms the
+    returned series itself.
+
+    Parameters
+    ----------
+    service:
+        Department analysis service.
+
+    department_name:
+        Selected department.
+
+    meter_name:
+        Selected meter display name, or ``None`` if no meter is
+        available to plot.
+
+    filters:
+        Filter parameters collected from ``_render_filter_controls()``.
     """
-    render_section_header(
-        "Department Trends",
-        "Placeholder visualizations pending live trend data.",
-    )
+    title = f"{meter_name} Trend" if meter_name else "Meter Trend"
+
+    if HAS_LAYOUT:
+        render_section_header(title)
+    else:
+        st.subheader(title)
 
     chart_service = ChartService()
 
-    columns = (
-        create_columns(len(PLACEHOLDER_CHART_TITLES))
-        if HAS_LAYOUT
-        else st.columns(len(PLACEHOLDER_CHART_TITLES))
-    )
+    if meter_name is None:
+        figure = chart_service.create_empty_chart(
+            title=title,
+            message="No meter selected.",
+        )
+        st.plotly_chart(figure, use_container_width=True)
+        return
 
-    for column, title in zip(columns, PLACEHOLDER_CHART_TITLES):
-        with column:
-            figure = chart_service.create_empty_chart(title=title)
-            st.plotly_chart(figure, use_container_width=True)
+    try:
+        trend = _get_meter_trend(
+            service,
+            department_name,
+            meter_name,
+            filters,
+        )
+    except ValueError as exc:
+        st.info(str(exc))
+        return
+
+    if trend is None or trend.empty:
+        figure = chart_service.create_empty_chart(
+            title=title,
+            message="No data available for the selected filter.",
+        )
+    else:
+        figure = chart_service.create_line_chart(
+            trend,
+            title=title,
+        )
+
+    st.plotly_chart(
+        figure,
+        use_container_width=True,
+    )
 
 
 def render_content() -> None:
@@ -394,15 +592,18 @@ def render_content() -> None:
     Render the Department Analysis page content.
 
     Renders, in order: page title, department selection, filter
-    controls, department summary KPI cards, latest department record,
-    the filtered department data table, placeholder trend charts, and
-    the footer. All engineering data is obtained exclusively through
-    ``DepartmentAnalysisService`` and all charts through
-    ``ChartService``; this function never inspects workbook structure,
-    slices or filters DataFrames, performs engineering calculations,
-    or accesses the repository directly. Unexpected failures are
-    surfaced as an informative Streamlit error rather than crashing
-    the page.
+    controls, meter selection, department summary KPI cards, latest
+    department record, the filtered department data table, and the
+    selected meter's trend chart. All engineering data is obtained
+    exclusively through ``DepartmentAnalysisService`` and all charts
+    through ``ChartService``; this function never inspects workbook
+    structure, slices or filters DataFrames, performs engineering
+    calculations, or accesses the repository directly. Unexpected
+    failures are surfaced as an informative Streamlit error rather
+    than crashing the page.
+
+    No sidebar, navbar, footer, or ``st.set_page_config()`` is
+    rendered by this page.
     """
     try:
         service = DepartmentAnalysisService()
@@ -417,6 +618,10 @@ def render_content() -> None:
         st.divider()
 
         filters = _render_filter_controls()
+
+        st.divider()
+
+        meter_name = _select_meter(service, department_name)
 
         st.divider()
 
@@ -442,12 +647,17 @@ def render_content() -> None:
 
         st.divider()
 
-        _render_charts()
+        _render_meter_trend(
+            service,
+            department_name,
+            meter_name,
+            filters,
+        )
 
-        if HAS_LAYOUT:
-            render_footer()
+    except ValueError as exc:
+        st.error(f"Unable to load Department Analysis: {exc}")
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - surfaced via st.error
         st.error(
-            f"Unable to load Department Analysis: {exc}"
+            f"Unexpected error loading Department Analysis: {exc}"
         )
