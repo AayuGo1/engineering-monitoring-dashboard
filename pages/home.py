@@ -1,46 +1,67 @@
 """
 pages/home.py
 
-Premium landing page for the Engineering Monitoring Dashboard.
+Landing page for the Engineering Monitoring Dashboard.
 
-This module renders the application's landing page using the reusable
-sidebar, navbar, and centralized theme tokens.
+This module renders only the Home page's presentation content. It relies
+on the shared layout helpers (`render_page_container`, `render_page_title`,
+`render_section_header`, `create_columns`) for structural concerns,
+matching the architecture used by `pages/overview.py` and
+`pages/department_analysis.py`. Like those pages, it degrades gracefully
+via a `HAS_LAYOUT` flag if the shared layout module is unavailable.
 
 Responsibilities
 ----------------
-- Render sidebar
-- Render navbar
-- Render hero section
+- Render hero / welcome section
 - Render navigation cards
 - Render system status placeholders
-- Render footer
 
 This module intentionally contains:
-- No backend logic
-- No Excel integration
-- No calculations
-- No KPIs
-- No charts
+- No `st.set_page_config()`
+- No sidebar rendering
+- No navbar rendering
+- No footer rendering (owned exclusively by `app.py`)
+- No application initialization or routing
+- No global error handling
+- No backend logic (workbook loading, parsing, repository/service access)
+- No hard dependency on `components.theme`
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 import streamlit as st
 
-from components.navbar import render_navbar
-from components.sidebar import render_sidebar
-from components.theme import (
-    ANIMATION,
-    COLORS,
-    LAYOUT,
-    RADIUS,
-    SHADOWS,
-    SPACING,
-    TYPOGRAPHY,
-)
+try:
+    from components.layout import (
+        create_columns,
+        render_page_container,
+        render_page_title,
+        render_section_header,
+    )
+
+    HAS_LAYOUT = True
+except ImportError:
+    HAS_LAYOUT = False
+
+
+# =============================================================================
+# Page-Local Style Tokens
+# =============================================================================
+# Kept minimal and local to this page rather than importing components.theme,
+# so Home does not carry a hard dependency on the theme module. If these
+# values later need to be shared across pages, promote them into layout.py.
+
+_CARD_BG = "rgba(15, 23, 42, 0.45)"
+_CARD_BORDER = "rgba(255, 255, 255, 0.06)"
+_CARD_RADIUS_PX = 16
+_CARD_PADDING_PX = 24
+_TEXT_PRIMARY = "#f1f5f9"
+_TEXT_SECONDARY = "#94a3b8"
+_HOVER_SCALE = 1.02
+_TRANSITION = "0.25s ease"
 
 
 # =============================================================================
@@ -55,6 +76,7 @@ class NavigationCard:
     icon: str
     title: str
     description: str
+    target_page: str
 
 
 # =============================================================================
@@ -67,25 +89,29 @@ NAVIGATION_CARDS: List[NavigationCard] = [
         icon="📊",
         title="Overview",
         description="High-level engineering performance overview.",
+        target_page="📊 Overview",
     ),
     NavigationCard(
         icon="🏭",
         title="Department Analysis",
         description="Explore department-wise engineering metrics.",
+        target_page="🏭 Department Analysis",
     ),
     NavigationCard(
         icon="🌀",
         title="Air Compressor",
         description="Compressed air monitoring and performance.",
+        target_page="🌀 Air Compressor",
     ),
     NavigationCard(
         icon="❄",
         title="Freon Monitoring",
         description="Monitor refrigeration and freon systems.",
+        target_page="❄ Freon Monitoring",
     ),
 ]
 
-SYSTEM_STATUS = [
+SYSTEM_STATUS: List[Tuple[str, str]] = [
     ("Plant Status", "--"),
     ("Excel Status", "--"),
     ("GitHub Status", "--"),
@@ -98,66 +124,27 @@ SYSTEM_STATUS = [
 # =============================================================================
 
 
-def inject_styles() -> None:
-    """
-    Inject page-specific styling.
+def _inject_styles() -> None:
+    """Inject minimal, page-local styling for Home's cards.
 
-    All design values originate from the centralized theme module.
+    Uses local style tokens rather than `components.theme`, so this page
+    stays loosely coupled and does not break if the theme module changes.
     """
-
     st.markdown(
         f"""
 <style>
 
-.main {{
-    padding-top:{LAYOUT.page_padding}px;
-}}
-
-.home-hero {{
-    padding:{LAYOUT.card_padding}px;
-    border-radius:{RADIUS.extra_large}px;
-    background:{COLORS.surface};
-    border:1px solid {COLORS.border};
-    box-shadow:{SHADOWS.medium};
-    margin-bottom:{SPACING.xxl}px;
-}}
-
-.hero-title {{
-    color:{COLORS.text_primary};
-    font-size:{TYPOGRAPHY.heading_xl}px;
-    font-weight:{TYPOGRAPHY.weight_bold};
-    font-family:{TYPOGRAPHY.primary_font};
-}}
-
-.hero-subtitle {{
-    margin-top:{SPACING.md}px;
-    color:{COLORS.text_secondary};
-    font-size:{TYPOGRAPHY.body_lg}px;
-    font-family:{TYPOGRAPHY.primary_font};
-}}
-
-.section-title {{
-    margin-top:{SPACING.xl}px;
-    margin-bottom:{SPACING.lg}px;
-    color:{COLORS.text_primary};
-    font-size:{TYPOGRAPHY.heading_md}px;
-    font-weight:{TYPOGRAPHY.weight_semibold};
-    font-family:{TYPOGRAPHY.primary_font};
-}}
-
 .glass-card {{
-    background:{COLORS.card};
-    border:1px solid {COLORS.border};
-    border-radius:{RADIUS.large}px;
-    padding:{LAYOUT.card_padding}px;
-    box-shadow:{SHADOWS.light};
-    transition:all {ANIMATION.transition_speed};
+    background:{_CARD_BG};
+    border:1px solid {_CARD_BORDER};
+    border-radius:{_CARD_RADIUS_PX}px;
+    padding:{_CARD_PADDING_PX}px;
+    transition:all {_TRANSITION};
     height:100%;
 }}
 
 .glass-card:hover {{
-    transform:scale({ANIMATION.hover_scale});
-    box-shadow:{SHADOWS.medium};
+    transform:scale({_HOVER_SCALE});
 }}
 
 .card-icon {{
@@ -165,55 +152,46 @@ def inject_styles() -> None:
 }}
 
 .card-title {{
-    margin-top:{SPACING.md}px;
-    color:{COLORS.text_primary};
-    font-size:{TYPOGRAPHY.heading_sm}px;
-    font-weight:{TYPOGRAPHY.weight_bold};
+    margin-top:12px;
+    color:{_TEXT_PRIMARY};
+    font-size:1.15rem;
+    font-weight:700;
 }}
 
 .card-description {{
-    margin-top:{SPACING.sm}px;
-    color:{COLORS.text_secondary};
-    font-size:{TYPOGRAPHY.body_sm}px;
+    margin-top:6px;
+    color:{_TEXT_SECONDARY};
+    font-size:0.9rem;
 }}
 
 .status-card {{
-    background:{COLORS.card};
-    border:1px solid {COLORS.border};
-    border-radius:{RADIUS.medium}px;
-    padding:{LAYOUT.card_padding}px;
+    background:{_CARD_BG};
+    border:1px solid {_CARD_BORDER};
+    border-radius:{_CARD_RADIUS_PX}px;
+    padding:{_CARD_PADDING_PX}px;
     text-align:center;
-    box-shadow:{SHADOWS.light};
 }}
 
 .status-title {{
-    color:{COLORS.text_secondary};
-    font-size:{TYPOGRAPHY.body_sm}px;
+    color:{_TEXT_SECONDARY};
+    font-size:0.9rem;
 }}
 
 .status-value {{
-    margin-top:{SPACING.sm}px;
-    color:{COLORS.text_primary};
-    font-size:{TYPOGRAPHY.heading_sm}px;
-    font-weight:{TYPOGRAPHY.weight_bold};
-}}
-
-.footer {{
-    margin-top:{SPACING.xxl}px;
-    padding:{SPACING.xl}px;
-    text-align:center;
-    color:{COLORS.text_muted};
-    font-size:{TYPOGRAPHY.body_sm}px;
+    margin-top:6px;
+    color:{_TEXT_PRIMARY};
+    font-size:1.15rem;
+    font-weight:700;
 }}
 
 div.stButton > button {{
     width:100%;
-    border-radius:{RADIUS.medium}px;
-    transition:all {ANIMATION.transition_speed};
+    border-radius:{_CARD_RADIUS_PX}px;
+    transition:all {_TRANSITION};
 }}
 
 div.stButton > button:hover {{
-    transform:scale({ANIMATION.hover_scale});
+    transform:scale({_HOVER_SCALE});
 }}
 
 </style>
@@ -227,40 +205,37 @@ div.stButton > button:hover {{
 # =============================================================================
 
 
-def render_hero() -> None:
-    """Render the landing page hero section."""
-
-    st.markdown(
-        """
-<div class="home-hero">
-    <div class="hero-title">
-        Engineering Monitoring Dashboard
-    </div>
-
-    <div class="hero-subtitle">
-        Monitor energy, utilities, refrigeration, compressed air and
-        engineering systems from one intelligent platform.
-    </div>
-</div>
-""",
-        unsafe_allow_html=True,
+def _render_welcome_section() -> None:
+    """Render the Home page welcome / hero copy."""
+    title = "Engineering Monitoring Dashboard"
+    subtitle = (
+        "Monitor energy, utilities, refrigeration, compressed air "
+        "and engineering systems from one intelligent platform."
     )
 
+    if HAS_LAYOUT:
+        render_page_title(title=title, subtitle=subtitle)
+    else:
+        st.title(title)
+        st.caption(subtitle)
 
-def render_navigation_cards() -> None:
-    """Render premium navigation cards dynamically."""
 
-    st.markdown(
-        '<div class="section-title">Modules</div>',
-        unsafe_allow_html=True,
-    )
+def _render_navigation_cards() -> None:
+    """Render navigation cards linking to the other dashboard modules.
 
-    columns = st.columns(len(NAVIGATION_CARDS), gap="large")
+    Selecting a card updates `st.session_state.current_page`, which is
+    read by the router in `app.py` on the next rerun. This module does
+    not perform routing itself; it only signals the desired destination.
+    """
+    if HAS_LAYOUT:
+        render_section_header("Modules")
+        columns = create_columns(len(NAVIGATION_CARDS), gap="large")
+    else:
+        st.subheader("Modules")
+        columns = st.columns(len(NAVIGATION_CARDS))
 
     for column, card in zip(columns, NAVIGATION_CARDS):
-
         with column:
-
             st.markdown(
                 f"""
 <div class="glass-card">
@@ -282,27 +257,26 @@ def render_navigation_cards() -> None:
                 unsafe_allow_html=True,
             )
 
-            st.button(
+            if st.button(
                 "Open",
                 key=f"cta_{card.title}",
                 use_container_width=True,
-            )
+            ):
+                st.session_state.current_page = card.target_page
+                st.rerun()
 
 
-def render_system_status() -> None:
+def _render_system_status() -> None:
     """Render system status placeholder cards."""
-
-    st.markdown(
-        '<div class="section-title">System Status</div>',
-        unsafe_allow_html=True,
-    )
-
-    columns = st.columns(4, gap="large")
+    if HAS_LAYOUT:
+        render_section_header("System Status")
+        columns = create_columns(len(SYSTEM_STATUS), gap="large")
+    else:
+        st.subheader("System Status")
+        columns = st.columns(len(SYSTEM_STATUS))
 
     for column, (title, value) in zip(columns, SYSTEM_STATUS):
-
         with column:
-
             st.markdown(
                 f"""
 <div class="status-card">
@@ -321,59 +295,27 @@ def render_system_status() -> None:
             )
 
 
-def render_footer() -> None:
-    """Render page footer."""
-
-    st.markdown(
-        """
-<div class="footer">
-
-Engineering Monitoring Dashboard
-
-<br>
-
-Version 1.0
-
-<br>
-
-Internship Project
-
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-
 # =============================================================================
-# Page
+# Public API
 # =============================================================================
 
 
-def render_page() -> None:
+def render_content() -> None:
+    """Render the Home page content.
+
+    This is the sole public entry point for this module, matching the
+    contract used by `pages/overview.py` and `pages/department_analysis.py`.
+    It renders only page-local content. Page container framing follows
+    the same call pattern used elsewhere in the project (a plain call,
+    not a context manager). Sidebar, navbar, page configuration, footer,
+    routing, and global error handling remain the exclusive responsibility
+    of `app.py`.
     """
-    Render the Home page.
-    """
+    _inject_styles()
 
-    st.set_page_config(
-        page_title="Engineering Monitoring Dashboard",
-        page_icon="🏭",
-        layout="wide",
-    )
+    if HAS_LAYOUT:
+        render_page_container()
 
-    inject_styles()
-
-    render_sidebar()
-
-    render_navbar()
-
-    render_hero()
-
-    render_navigation_cards()
-
-    render_system_status()
-
-    render_footer()
-
-
-if __name__ == "__main__":
-    render_page()
+    _render_welcome_section()
+    _render_navigation_cards()
+    _render_system_status()
