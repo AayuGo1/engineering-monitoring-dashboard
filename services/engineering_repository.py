@@ -16,6 +16,9 @@ Responsibilities
 - Expose engineering data rows.
 - Expose engineering departments.
 - Expose engineering meters.
+- Expose department- and meter-scoped DataFrames/Series, so that
+  higher-level services never slice DataFrames, use column indices,
+  or locate departments/meters themselves.
 
 This module intentionally contains:
 - No Streamlit
@@ -28,7 +31,7 @@ This module intentionally contains:
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import pandas as pd
 
@@ -39,6 +42,7 @@ from services.engineering_parser import (
     EngineeringMeter,
     EngineeringParser,
     EngineeringWorkbook,
+    WorkbookColumn,
 )
 
 
@@ -48,7 +52,12 @@ class EngineeringRepository:
 
     The repository eagerly loads and parses the engineering worksheet
     during construction. All parsed objects are cached and reused by
-    downstream services.
+    downstream services. This is the single source of truth for
+    engineering workbook data access: higher-level services must
+    obtain department metadata, meter metadata, and engineering
+    DataFrames/Series exclusively through this class, rather than
+    slicing DataFrames, using column indices, or locating departments
+    and meters themselves.
     """
 
     def __init__(self) -> None:
@@ -169,6 +178,10 @@ class EngineeringRepository:
         """
         Return a department or raise an exception if it does not exist.
 
+        Centralizes department validation so that every public method
+        needing a guaranteed-valid department raises the same
+        descriptive error instead of duplicating this check.
+
         Parameters
         ----------
         department_name:
@@ -201,6 +214,10 @@ class EngineeringRepository:
     ) -> EngineeringMeter:
         """
         Return a meter or raise an exception if it does not exist.
+
+        Centralizes meter validation so that every public method
+        needing a guaranteed-valid meter raises the same descriptive
+        error instead of duplicating this check.
 
         Parameters
         ----------
@@ -315,7 +332,8 @@ class EngineeringRepository:
         Returns
         -------
         pandas.DataFrame
-            The department's meter columns followed by the Date column.
+            A copy of the department's meter columns followed by the
+            Date column.
 
         Raises
         ------
@@ -350,6 +368,24 @@ class EngineeringRepository:
     ) -> pd.Series:
         """
         Return engineering readings for a single meter.
+
+        Parameters
+        ----------
+        department_name:
+            Department name.
+
+        meter_name:
+            Meter name.
+
+        Returns
+        -------
+        pandas.Series
+            A copy of the meter's engineering readings.
+
+        Raises
+        ------
+        ValueError
+            If the department or meter cannot be found.
         """
         meter = self._require_meter(
             department_name,
@@ -366,6 +402,16 @@ class EngineeringRepository:
     def get_latest_record(self) -> pd.Series:
         """
         Return the latest engineering record.
+
+        Returns
+        -------
+        pandas.Series
+            A copy of the most recent row of engineering data.
+
+        Raises
+        ------
+        ValueError
+            If no engineering records are available.
         """
         dataframe = self.get_engineering_dataframe()
 
@@ -385,6 +431,10 @@ class EngineeringRepository:
     ) -> tuple[str, ...]:
         """
         Return department display names in workbook order.
+
+        Returns
+        -------
+        tuple[str, ...]
         """
         return tuple(
             department.display_name
@@ -397,6 +447,20 @@ class EngineeringRepository:
     ) -> tuple[str, ...]:
         """
         Return meter display names for a department.
+
+        Parameters
+        ----------
+        department_name:
+            Department name.
+
+        Returns
+        -------
+        tuple[str, ...]
+
+        Raises
+        ------
+        ValueError
+            If the department cannot be found.
         """
         department = self._require_department(
             department_name
@@ -406,7 +470,6 @@ class EngineeringRepository:
             meter.display_name
             for meter in department.meters
         )
- 
 
     # ------------------------------------------------------------------
     # Metadata
@@ -446,16 +509,17 @@ class EngineeringRepository:
     # Date Metadata
     # ------------------------------------------------------------------
 
-    def get_date_column(self) -> Any:
+    def get_date_column(self) -> WorkbookColumn:
         """
         Return engineering date column metadata.
 
         This method delegates directly to
-        ``EngineeringParser.get_date_column()``.
+        ``EngineeringParser.get_date_column()`` and never duplicates
+        the parser's date-column discovery logic.
 
         Returns
         -------
-        Any
+        WorkbookColumn
             Parser-defined date column metadata.
 
         Raises
