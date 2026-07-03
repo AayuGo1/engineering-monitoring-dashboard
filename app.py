@@ -89,10 +89,8 @@ def _configure_application() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-st.markdown(
-    "<h1 style='color:red'>TEST HTML</h1>",
-    unsafe_allow_html=True,
-)
+
+
 
 # ==========================================================
 # ROUTING HELPERS
