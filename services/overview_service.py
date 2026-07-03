@@ -252,7 +252,7 @@ class OverviewService:
     # Private Helpers
     # ------------------------------------------------------------------
 
-    def _resolve_date_column(self, dataframe: pd.DataFrame) -> Optional[str]:
+    def _resolve_date_column(self, dataframe: pd.DataFrame) -> Optional[int]:
         """
         Resolve the workbook Date column's identifier, if present.
 
@@ -264,6 +264,15 @@ class OverviewService:
         ``dataframe``, ``None`` is returned so callers can iterate all
         columns instead.
 
+        ``WorkbookColumn.column_index`` (an ``int``) is used here, not
+        ``WorkbookColumn.data_column`` (a ``str``): DataFrames returned
+        by ``EngineeringRepository`` have their original (integer)
+        column labels, so ``data_column``'s stringified value would
+        never match (``"3" != 3``) and the Date column would silently
+        never be excluded from numeric reading calculations. This
+        mirrors the fix already applied in ``AirCompressorService``,
+        ``FreonService``, and ``DepartmentAnalysisService``.
+
         Parameters
         ----------
         dataframe:
@@ -271,16 +280,16 @@ class OverviewService:
 
         Returns
         -------
-        str | None
-            The Date column's identifier, or ``None`` if it cannot be
-            resolved for this DataFrame.
+        int | None
+            The Date column's ``column_index``, or ``None`` if it
+            cannot be resolved for this DataFrame.
         """
         try:
             date_column = self._repository.get_date_column()
         except (ValueError, AttributeError):
             return None
 
-        label = getattr(date_column, "data_column", None)
+        label = getattr(date_column, "column_index", None)
 
         if label is not None and label in dataframe.columns:
             return label
