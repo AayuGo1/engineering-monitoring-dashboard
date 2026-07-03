@@ -14,6 +14,13 @@ Responsibilities
 - Centralize card styling
 - Provide consistent rendering APIs
 - Consume only centralized theme constants
+
+This revision upgrades card styling toward a premium, dark
+glassmorphism, industrial-SCADA look (backdrop blur, layered shadows,
+a gradient top accent, hover elevation, tighter numeric typography for
+KPI values) while keeping every existing class, field, and method
+signature unchanged, so pages that build ``KPICard(...)`` etc. and
+call ``.render()`` continue to work without modification.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ import streamlit as st
 from components.theme import (
     ANIMATION,
     COLORS,
+    GRADIENTS,
     LAYOUT,
     RADIUS,
     SHADOWS,
@@ -52,22 +60,50 @@ def inject_card_styles() -> None:
 <style>
 
 .dashboard-card {{
+    position:relative;
     width:100%;
-    background:{COLORS.card};
-    border:1px solid {COLORS.border};
+    background:{COLORS.glass_surface};
+    backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);
+    border:1px solid {COLORS.glass_border};
     border-radius:{RADIUS.large}px;
     padding:{LAYOUT.card_padding}px;
-    box-shadow:{SHADOWS.light};
-    transition:all {ANIMATION.transition_speed};
+    box-shadow:{SHADOWS.glass};
+    transition:transform {ANIMATION.transition_speed} {ANIMATION.easing},
+               box-shadow {ANIMATION.transition_speed} {ANIMATION.easing},
+               border-color {ANIMATION.transition_speed} {ANIMATION.easing};
     overflow:hidden;
 }}
 
+.dashboard-card::before {{
+    content:"";
+    position:absolute;
+    top:0;
+    left:0;
+    right:0;
+    height:3px;
+    background:{GRADIENTS.accent_line};
+    opacity:0.85;
+}}
+
+.dashboard-card::after {{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:{GRADIENTS.glass_panel};
+    pointer-events:none;
+}}
+
 .dashboard-card:hover {{
-    transform:scale({ANIMATION.hover_scale});
-    box-shadow:{SHADOWS.medium};
+    transform:translateY(-3px) scale({ANIMATION.hover_scale});
+    box-shadow:{SHADOWS.heavy};
+    border-color:{COLORS.glass_border_active};
+    background:{COLORS.glass_surface_hover};
 }}
 
 .card-header {{
+    position:relative;
+    z-index:1;
     display:flex;
     align-items:center;
     gap:{SPACING.md}px;
@@ -75,40 +111,93 @@ def inject_card_styles() -> None:
 }}
 
 .card-icon {{
-    font-size:34px;
+    flex:0 0 auto;
+    width:44px;
+    height:44px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:22px;
+    border-radius:{RADIUS.medium}px;
+    background:rgba(59, 130, 246, 0.12);
+    border:1px solid {COLORS.glass_border};
 }}
 
 .card-title {{
     color:{COLORS.text_primary};
-    font-size:{TYPOGRAPHY.heading_sm}px;
-    font-weight:{TYPOGRAPHY.weight_bold};
+    font-size:{TYPOGRAPHY.body_sm}px;
+    font-weight:{TYPOGRAPHY.weight_semibold};
     font-family:{TYPOGRAPHY.primary_font};
+    letter-spacing:{TYPOGRAPHY.tracking_wide};
+    text-transform:uppercase;
+    opacity:0.85;
 }}
 
 .card-subtitle {{
     color:{COLORS.text_secondary};
     font-size:{TYPOGRAPHY.body_sm}px;
     font-family:{TYPOGRAPHY.primary_font};
+    margin-top:2px;
 }}
 
 .card-value {{
-    margin-top:{SPACING.md}px;
+    position:relative;
+    z-index:1;
+    margin-top:{SPACING.sm}px;
     color:{COLORS.text_primary};
     font-size:{TYPOGRAPHY.heading_lg}px;
-    font-weight:{TYPOGRAPHY.weight_bold};
-    font-family:{TYPOGRAPHY.primary_font};
+    font-weight:{TYPOGRAPHY.weight_extrabold};
+    font-family:{TYPOGRAPHY.mono_font};
+    letter-spacing:{TYPOGRAPHY.tracking_tight};
+    line-height:1.15;
+    word-break:break-word;
 }}
 
 .card-description {{
+    position:relative;
+    z-index:1;
     margin-top:{SPACING.md}px;
     color:{COLORS.text_secondary};
     font-size:{TYPOGRAPHY.body_sm}px;
+    font-family:{TYPOGRAPHY.primary_font};
+    line-height:1.5;
 }}
 
 .card-footer {{
+    position:relative;
+    z-index:1;
     margin-top:{SPACING.lg}px;
+    padding-top:{SPACING.sm}px;
+    border-top:1px solid {COLORS.glass_border};
     color:{COLORS.text_muted};
     font-size:{TYPOGRAPHY.body_xs}px;
+    font-family:{TYPOGRAPHY.primary_font};
+}}
+
+@media (max-width: {LAYOUT.breakpoint_tablet}px) {{
+    .dashboard-card {{
+        padding:{SPACING.lg}px;
+    }}
+
+    .card-value {{
+        font-size:{TYPOGRAPHY.heading_md}px;
+    }}
+}}
+
+@media (max-width: {LAYOUT.breakpoint_mobile}px) {{
+    .dashboard-card {{
+        padding:{SPACING.md}px;
+    }}
+
+    .card-icon {{
+        width:36px;
+        height:36px;
+        font-size:18px;
+    }}
+
+    .card-value {{
+        font-size:{TYPOGRAPHY.heading_sm}px;
+    }}
 }}
 
 </style>
