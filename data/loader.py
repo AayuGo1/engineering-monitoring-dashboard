@@ -92,7 +92,7 @@ def validate_workbook_exists(
     return path
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def load_workbook(
     workbook_path: str | Path = WORKBOOK_NAME,
 ) -> pd.ExcelFile:
