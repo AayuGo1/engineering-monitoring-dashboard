@@ -3,32 +3,32 @@ services/overview_service.py
 
 Backend service for the Overview Dashboard.
 
-This module provides a thin service layer over the engineering parser.
-Its responsibility is to expose parsed engineering data in a form that
-dashboard pages can consume without knowing anything about the workbook
-structure.
+This module provides a single backend interface for the Overview page.
+It encapsulates workbook loading, engineering parsing, and exposes
+metadata and engineering data through a stable, strongly-typed API.
 
 Responsibilities
 ----------------
 - Load the raw engineering worksheet.
 - Parse the engineering workbook.
-- Expose department metadata.
-- Expose department data.
-- Expose individual meter data.
-- Expose the latest engineering record.
+- Expose workbook metadata.
+- Expose engineering departments.
+- Expose engineering data.
+- Expose dashboard summary metadata.
 
 This module intentionally contains:
 - No Streamlit
 - No UI
 - No Plotly
 - No HTML
-- No KPI calculations
 - No engineering calculations
-- No aggregations
+- No KPI calculations
+- No aggregation logic
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional
 
 import pandas as pd
@@ -43,25 +43,67 @@ from services.engineering_parser import (
 )
 
 
+# =============================================================================
+# Data Models
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class DashboardSummary:
+    """
+    Summary metadata required by dashboard pages.
+
+    Attributes
+    ----------
+    workbook_loaded:
+        Indicates whether the workbook was successfully loaded.
+
+    department_count:
+        Number of discovered engineering departments.
+
+    meter_count:
+        Number of discovered engineering meters.
+
+    latest_record_count:
+        Number of engineering records available after the header rows.
+    """
+
+    workbook_loaded: bool
+    department_count: int
+    meter_count: int
+    latest_record_count: int
+
+
+# =============================================================================
+# Service
+# =============================================================================
+
+
 class OverviewService:
     """
-    Backend service for the Overview Dashboard.
+    Backend service powering the Overview Dashboard.
 
-    The workbook is parsed once during construction and reused for all
-    subsequent queries.
+    The workbook is loaded and parsed once during construction. Parsed
+    metadata is cached inside the service instance.
     """
 
     def __init__(self) -> None:
         """Initialize the Overview service."""
+
+        self._workbook_loaded = False
+
         self._raw_sheet = load_raw_sheet1()
 
         self._parser = EngineeringParser(self._raw_sheet)
 
         self._workbook = self._parser.parse()
 
-        self._data = self._raw_sheet.iloc[DATA_START_ROW:].reset_index(
-            drop=True
+        self._data = (
+            self._raw_sheet.iloc[DATA_START_ROW:]
+            .reset_index(drop=True)
         )
+
+        self._workbook_loaded = True
 
     # ------------------------------------------------------------------
     # Private Helpers
@@ -101,7 +143,7 @@ class OverviewService:
         return None
 
     # ------------------------------------------------------------------
-    # Public API
+    # Existing Public API (Backward Compatible)
     # ------------------------------------------------------------------
 
     def get_workbook(self) -> EngineeringWorkbook:
@@ -147,10 +189,7 @@ class OverviewService:
         name: str,
     ) -> pd.DataFrame:
         """
-        Return engineering readings for a department.
-
-        The returned DataFrame excludes the workbook header rows and
-        contains only the columns belonging to the requested department.
+        Return engineering readings belonging to a department.
 
         Parameters
         ----------
@@ -203,7 +242,7 @@ class OverviewService:
         Raises
         ------
         ValueError
-            If the meter cannot be found.
+            If the requested meter cannot be found.
         """
         meter = self._find_meter(
             department_name,
@@ -225,12 +264,11 @@ class OverviewService:
         Returns
         -------
         pandas.Series
-            Last engineering row.
 
         Raises
         ------
         ValueError
-            If no engineering records exist.
+            If no engineering records are available.
         """
         if self._data.empty:
             raise ValueError(
@@ -238,3 +276,75 @@ class OverviewService:
             )
 
         return self._data.iloc[-1].copy()
+
+    # ------------------------------------------------------------------
+    # Extended Dashboard API
+    # ------------------------------------------------------------------
+
+    def is_workbook_loaded(self) -> bool:
+        """
+        Return workbook loading status.
+
+        Returns
+        -------
+        bool
+        """
+        return self._workbook_loaded
+
+    def get_department_count(self) -> int:
+        """
+        Return the number of engineering departments.
+
+        Returns
+        -------
+        int
+        """
+        return len(self.get_departments())
+
+    def get_meter_count(self) -> int:
+        """
+        Return the total number of engineering meters.
+
+        Returns
+        -------
+        int
+        """
+        return sum(
+            len(department.meters)
+            for department in self.get_departments()
+        )
+
+    def get_dashboard_summary(self) -> DashboardSummary:
+        """
+        Return summary metadata required by dashboard pages.
+
+        Returns
+        -------
+        DashboardSummary
+        """
+        return DashboardSummary(
+            workbook_loaded=self.is_workbook_loaded(),
+            department_count=self.get_department_count(),
+            meter_count=self.get_meter_count(),
+            latest_record_count=len(self._data),
+        )
+
+    def get_latest_reading(self) -> None:
+        """
+        Placeholder for future latest reading calculation.
+
+        Returns
+        -------
+        None
+        """
+        return None
+
+    def get_previous_reading(self) -> None:
+        """
+        Placeholder for future previous reading calculation.
+
+        Returns
+        -------
+        None
+        """
+        return None
