@@ -1,8 +1,7 @@
-
 streamlit
 pandas
-numpy
 plotly
+numpy
 openpyxl
-GitPython
 requests
+GitPython
