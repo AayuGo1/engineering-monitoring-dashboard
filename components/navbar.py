@@ -81,29 +81,8 @@ def _inject_navbar_styles() -> None:
         f"""
         <style>
 
-        .emd-navbar-shell {{
-            background: {COLORS.glass_surface};
-            backdrop-filter: blur(18px);
-            -webkit-backdrop-filter: blur(18px);
-            border: 1px solid {COLORS.glass_border};
-            border-radius: {RADIUS.extra_large}px;
-            padding: {SPACING.lg}px {LAYOUT.card_padding}px;
-            box-shadow: {SHADOWS.glass};
-            margin-bottom: {SPACING.xl}px;
-            position: relative;
-            overflow: hidden;
-        }}
+      
 
-        .emd-navbar-shell::before {{
-            content: "";
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: {GRADIENTS.accent_line};
-            opacity: 0.9;
-        }}
 
         .emd-brand {{
             display: flex;
@@ -205,9 +184,7 @@ def _inject_navbar_styles() -> None:
         /* Streamlit adds default vertical gaps between stacked blocks;
            tighten these specifically inside the navbar shell so the
            column-based layout reads as one compact bar. */
-        div[data-testid="stVerticalBlock"]:has(> div.emd-navbar-shell) {{
-            gap: 0rem;
-        }}
+     
 
         </style>
         """,
@@ -422,7 +399,7 @@ def render_navbar(
     instance_id = uuid.uuid4().hex[:8]
 
     with st.container():
-        st.markdown('<div class="emd-navbar-shell">', unsafe_allow_html=True)
+    
 
         brand_col, status_col = st.columns([2, 3], gap="large")
 
