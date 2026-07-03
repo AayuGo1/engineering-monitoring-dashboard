@@ -293,17 +293,53 @@ class EngineeringRepository:
     ) -> pd.DataFrame:
         """
         Return engineering readings for a department.
+
+        The returned DataFrame always includes the engineering Date
+        column in addition to the department's meter columns, so that
+        callers can perform date-based filtering (via ``DateFilter``)
+        directly against this DataFrame without merging, appending, or
+        reconstructing anything themselves.
+
+        The Date column is always resolved through ``get_date_column()``
+        (which delegates to the parser) rather than being hardcoded or
+        guessed. It is appended after the department's meter columns so
+        that column-order-dependent consumers (e.g. code that scans
+        ``DataFrame.columns`` looking for the first meaningful reading)
+        continue to encounter meter columns before the Date column.
+
+        Parameters
+        ----------
+        department_name:
+            Department name.
+
+        Returns
+        -------
+        pandas.DataFrame
+            The department's meter columns followed by the Date column.
+
+        Raises
+        ------
+        ValueError
+            If the department cannot be found, or if the parser cannot
+            identify a date column.
         """
         department = self._require_department(
             department_name
         )
 
+        date_meter = self.get_date_column()
+
         dataframe = self.get_engineering_dataframe()
 
-        column_indices = [
+        meter_column_indices = [
             meter.column_index
             for meter in department.meters
         ]
+
+        column_indices = list(meter_column_indices)
+
+        if date_meter.column_index not in column_indices:
+            column_indices.append(date_meter.column_index)
 
         return dataframe.iloc[:, column_indices].copy()
 
