@@ -34,6 +34,8 @@ from typing import List, Tuple
 
 import streamlit as st
 
+from components.sidebar import SESSION_KEY
+
 try:
     from components.layout import (
         create_columns,
@@ -89,25 +91,25 @@ NAVIGATION_CARDS: List[NavigationCard] = [
         icon="📊",
         title="Overview",
         description="High-level engineering performance overview.",
-        target_page="📊 Overview",
+        target_page="Overview",
     ),
     NavigationCard(
         icon="🏭",
         title="Department Analysis",
         description="Explore department-wise engineering metrics.",
-        target_page="🏭 Department Analysis",
+        target_page="Department Analysis",
     ),
     NavigationCard(
         icon="🌀",
         title="Air Compressor",
         description="Compressed air monitoring and performance.",
-        target_page="🌀 Air Compressor",
+        target_page="Air Compressor",
     ),
     NavigationCard(
         icon="❄",
         title="Freon Monitoring",
         description="Monitor refrigeration and freon systems.",
-        target_page="❄ Freon Monitoring",
+        target_page="Freon Monitoring",
     ),
 ]
 
@@ -223,9 +225,11 @@ def _render_welcome_section() -> None:
 def _render_navigation_cards() -> None:
     """Render navigation cards linking to the other dashboard modules.
 
-    Selecting a card updates `st.session_state.current_page`, which is
-    read by the router in `app.py` on the next rerun. This module does
-    not perform routing itself; it only signals the desired destination.
+    Selecting a card updates `st.session_state[SESSION_KEY]`, the same
+    navigation state owned by `components.sidebar` and read by the
+    router in `app.py` on the next rerun. This module does not perform
+    routing itself; it only signals the desired destination using the
+    plain page labels `app.py` expects (no icon prefixes).
     """
     if HAS_LAYOUT:
         render_section_header("Modules")
@@ -262,7 +266,7 @@ def _render_navigation_cards() -> None:
                 key=f"cta_{card.title}",
                 use_container_width=True,
             ):
-                st.session_state.current_page = card.target_page
+                st.session_state[SESSION_KEY] = card.target_page
                 st.rerun()
 
 
