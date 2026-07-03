@@ -28,7 +28,7 @@ This module intentionally contains:
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
 
@@ -370,53 +370,7 @@ class EngineeringRepository:
             meter.display_name
             for meter in department.meters
         )
-    
-    # ------------------------------------------------------------------
-    # Meters
-    # ------------------------------------------------------------------
-
-    def get_meters(self) -> List[EngineeringMeter]:
-        """
-        Return all engineering meters.
-
-        Returns
-        -------
-        list[EngineeringMeter]
-        """
-        return list(self._meters)
-
-    def get_meter(
-        self,
-        department_name: str,
-        meter_name: str,
-    ) -> Optional[EngineeringMeter]:
-        """
-        Locate a meter within a department.
-
-        Parameters
-        ----------
-        department_name:
-            Department name.
-
-        meter_name:
-            Meter name.
-
-        Returns
-        -------
-        EngineeringMeter | None
-        """
-        department = self.get_department(department_name)
-
-        if department is None:
-            return None
-
-        normalized = meter_name.strip().casefold()
-
-        for meter in department.meters:
-            if meter.meter_name.casefold() == normalized:
-                return meter
-
-        return None
+ 
 
     # ------------------------------------------------------------------
     # Metadata
@@ -456,7 +410,7 @@ class EngineeringRepository:
     # Date Metadata
     # ------------------------------------------------------------------
 
-    def get_date_column(self):
+    def get_date_column(self) -> Any:
         """
         Return engineering date column metadata.
 
