@@ -7,6 +7,28 @@ This page is intentionally UI-only. It consumes reusable project
 components, ``AirCompressorService`` for engineering data, and
 ``ChartService`` for chart rendering, without performing any workbook
 loading, engineering calculations, or business logic of its own.
+
+Bugfix notes
+------------
+1. This page previously called ``render_footer()`` itself at the end
+   of ``render_content()``. ``app.py`` already calls
+   ``render_footer()`` exactly once after routing to any page (see
+   its module docstring: "Footer rendering (exactly once)"), so the
+   extra call here caused the Air Compressor page to render two
+   footers. Footer rendering is owned exclusively by ``app.py``; this
+   page no longer imports or calls it.
+2. ``_render_kpis``, ``_render_available_meters``,
+   ``_render_latest_readings``, and ``_render_meter_trend`` previously
+   caught only ``ValueError``. Any other exception type raised by the
+   service layer (for example while the workbook/data layer is still
+   being brought in line with this page's expectations) would
+   propagate uncaught out of these helpers, abort the remainder of
+   ``render_content()``, and get caught only by ``app.py``'s top-level
+   safety net — leaving everything below the failure point blank
+   instead of the rest of the page rendering normally. Each helper now
+   also catches ``Exception`` and reports it via ``st.error``,
+   matching the already-correct pattern used in
+   ``pages/freon_monitoring.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +43,6 @@ from services.chart_service import ChartService
 try:
     from components.layout import (
         create_columns,
-        render_footer,
         render_page_container,
         render_page_title,
         render_section_header,
@@ -93,6 +114,9 @@ def _render_kpis(service: AirCompressorService) -> None:
     except ValueError as error:
         st.error(f"Unable to load Air Compressor summary: {error}")
         return
+    except Exception as error:  # noqa: BLE001 - surfaced via st.error
+        st.error(f"Unexpected error loading Air Compressor summary: {error}")
+        return
 
     kpis = [
         ("Latest Reading", _format_value(summary.latest_reading), "📈"),
@@ -138,6 +162,9 @@ def _render_available_meters(service: AirCompressorService) -> None:
     except ValueError as error:
         st.error(f"Unable to load Air Compressor meters: {error}")
         return
+    except Exception as error:  # noqa: BLE001 - surfaced via st.error
+        st.error(f"Unexpected error loading Air Compressor meters: {error}")
+        return
 
     if not meters:
         st.info("No meters found for the Air Compressor section.")
@@ -164,6 +191,11 @@ def _render_latest_readings(service: AirCompressorService) -> None:
         latest_readings = service.get_latest_compressor_readings()
     except ValueError as error:
         st.error(f"Unable to load latest Air Compressor readings: {error}")
+        return
+    except Exception as error:  # noqa: BLE001 - surfaced via st.error
+        st.error(
+            f"Unexpected error loading latest Air Compressor readings: {error}"
+        )
         return
 
     if latest_readings.empty:
@@ -248,6 +280,13 @@ def _render_meter_trend(
             st.subheader(title)
         st.error(f"Unable to load '{title}' data: {error}")
         return
+    except Exception as error:  # noqa: BLE001 - surfaced via st.error
+        if HAS_LAYOUT:
+            render_section_header(title)
+        else:
+            st.subheader(title)
+        st.error(f"Unexpected error loading '{title}' data: {error}")
+        return
 
     _render_trend_chart(title, trend)
 
@@ -255,6 +294,10 @@ def _render_meter_trend(
 def render_content() -> None:
     """
     Render the Air Compressor dashboard content.
+
+    Application configuration, sidebar, navbar, footer, and routing
+    remain the exclusive responsibility of ``app.py``; this page never
+    renders its own footer.
     """
     _render_title()
 
@@ -294,6 +337,3 @@ def render_content() -> None:
         "Running Load Trend",
         "get_running_load_trend",
     )
-
-    if HAS_LAYOUT:
-        render_footer()
