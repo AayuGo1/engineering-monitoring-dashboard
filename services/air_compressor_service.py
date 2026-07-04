@@ -65,6 +65,27 @@ This service therefore:
    meter names followed, just applied to the structure the workbook
    actually has.
 
+Bugfix note — graceful handling of missing positions
+-----------------------------------------------------
+A given workbook is not guaranteed to actually contain data columns
+for all five logical readings that ``AirCompressorFieldPositions``
+assumes -- the section's discovered data-column count can be fewer
+(or more) than the five configured positions. ``_resolve_field_column``
+previously treated a configured position beyond what the workbook
+actually contains as an error and raised
+``ValueError("Field position X is out of range ...")``, which
+propagated out of whichever ``get_*_trend()`` method was called and
+crashed page rendering.
+
+This mirrors, and is fixed the same way as, the equivalent method in
+``FreonService``: resolving a position the workbook doesn't provide is
+not an error condition — it simply means that particular reading is
+absent from this workbook. ``_resolve_field_column`` now returns
+``None`` in that case, and ``_get_filtered_field_trend`` reports the
+reading as unavailable by returning an empty ``pandas.Series`` (which
+callers already render as an empty/"no data" chart), instead of
+raising.
+
 This module intentionally contains:
 - No Streamlit
 - No HTML
@@ -110,6 +131,11 @@ class AirCompressorFieldPositions:
     are configuration, overridable at ``AirCompressorService``
     construction time, rather than hardcoded meter-name literals
     scattered through the class.
+
+    Not every workbook is guaranteed to provide data columns for all
+    five positions below. A workbook with fewer discovered data
+    columns than a given position requires simply does not have that
+    reading; see ``AirCompressorService._resolve_field_column``.
     """
 
     pressure: int = 0
@@ -309,11 +335,22 @@ class AirCompressorService:
             column for column in dataframe.columns if column != date_label
         ]
 
-    def _resolve_field_column(self, position: int) -> int:
+    def _resolve_field_column(self, position: int) -> Optional[int]:
         """
         Resolve the DataFrame column label for a field at a given
         position among the section's dynamically discovered data
         columns.
+
+        The number of data columns a workbook actually provides for
+        this section is not guaranteed to match the five logical
+        readings (pressure, air flow, air consumption, running hours,
+        running load) that ``AirCompressorFieldPositions`` defaults
+        assume -- a workbook may expose fewer (or more) data columns
+        than that. Rather than treating a configured position beyond
+        what the workbook actually contains as an error, this method
+        reports the reading as unavailable so callers can degrade
+        gracefully (see ``_get_filtered_field_trend``), instead of
+        raising and crashing page rendering.
 
         Parameters
         ----------
@@ -323,23 +360,21 @@ class AirCompressorService:
 
         Returns
         -------
-        int
-            The corresponding DataFrame column label.
+        int | None
+            The corresponding DataFrame column label, or ``None`` if
+            ``position`` falls outside the section's dynamically
+            discovered data columns (i.e. the workbook does not
+            provide that many readings for this section).
 
         Raises
         ------
         ValueError
-            If the department/meter cannot be resolved, or if
-            ``position`` falls outside the discovered data columns.
+            If the department or its meter cannot be resolved.
         """
         columns = self._get_field_columns()
 
         if position < 0 or position >= len(columns):
-            raise ValueError(
-                f"Field position {position} is out of range for the "
-                f"'{self._department_name}' section, which has "
-                f"{len(columns)} discovered data column(s): {columns}."
-            )
+            return None
 
         return columns[position]
 
@@ -427,6 +462,12 @@ class AirCompressorService:
         their actual DataFrame column labels, never a stringified
         ``data_column``, so the two identifiers are never mixed.
 
+        If ``position`` does not correspond to a data column the
+        workbook actually provides for this section, this is not
+        treated as an error: the reading is simply absent from this
+        workbook, and an empty series is returned, exactly as when the
+        department itself has no data.
+
         Parameters
         ----------
         position:
@@ -459,14 +500,15 @@ class AirCompressorService:
             The field's (optionally filtered) readings, indexed by
             the corresponding engineering Date values so charts built
             from this Series plot against real dates instead of row
-            numbers.
+            numbers. Empty if the department has no data or if
+            ``position`` addresses a reading the workbook does not
+            provide for this section.
 
         Raises
         ------
         ValueError
-            If the department or meter cannot be resolved, if the
-            repository cannot identify a Date column, or if
-            ``position`` falls outside the discovered data columns.
+            If the department or meter cannot be resolved, or if the
+            repository cannot identify a Date column.
         """
         department_frame = self._repository.get_department_dataframe(
             self._department_name
@@ -476,6 +518,9 @@ class AirCompressorService:
             return pd.Series(dtype=float)
 
         field_label = self._resolve_field_column(position)
+
+        if field_label is None:
+            return pd.Series(dtype=float)
 
         date_column = self._repository.get_date_column()
         date_label = date_column.column_index
@@ -642,6 +687,10 @@ class AirCompressorService:
         Return the pressure reading's values, optionally filtered by
         date using ``DateFilter``.
 
+        Returns an empty series if the workbook does not provide a
+        data column at the configured pressure position (see
+        ``AirCompressorFieldPositions``).
+
         Parameters
         ----------
         mode:
@@ -671,7 +720,7 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            If the pressure column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.pressure,
@@ -696,6 +745,10 @@ class AirCompressorService:
         """
         Return the air flow reading's values, optionally filtered by
         date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured air flow position (see
+        ``AirCompressorFieldPositions``).
 
         Parameters
         ----------
@@ -726,7 +779,7 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            If the air flow column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.air_flow,
@@ -751,6 +804,10 @@ class AirCompressorService:
         """
         Return the air consumption reading's values, optionally
         filtered by date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured air consumption position (see
+        ``AirCompressorFieldPositions``).
 
         Parameters
         ----------
@@ -781,7 +838,7 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            If the air consumption column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.air_consumption,
@@ -806,6 +863,10 @@ class AirCompressorService:
         """
         Return the running hours reading's values, optionally
         filtered by date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured running hours position (see
+        ``AirCompressorFieldPositions``).
 
         Parameters
         ----------
@@ -836,7 +897,7 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            If the running hours column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.running_hours,
@@ -861,6 +922,10 @@ class AirCompressorService:
         """
         Return the running load reading's values, optionally filtered
         by date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured running load position (see
+        ``AirCompressorFieldPositions``).
 
         Parameters
         ----------
@@ -891,7 +956,7 @@ class AirCompressorService:
         Raises
         ------
         ValueError
-            If the running load column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.running_load,
