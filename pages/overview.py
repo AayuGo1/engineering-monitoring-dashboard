@@ -12,6 +12,15 @@ data exclusively through ``OverviewService`` and all placeholder trend
 visualizations exclusively through ``ChartService``. It never slices
 DataFrames, inspects workbook structure, performs engineering
 calculations, or parses Excel data directly.
+
+Bugfix note
+-----------
+This page previously called ``render_footer()`` itself at the end of
+``render_content()``. ``app.py`` already calls ``render_footer()``
+exactly once after routing to any page (see its module docstring:
+"Footer rendering (exactly once)"), so the extra call here caused the
+Overview page to render two footers. Footer rendering is owned
+exclusively by ``app.py``; this page no longer imports or calls it.
 """
 
 from __future__ import annotations
@@ -30,7 +39,6 @@ try:
         render_page_container,
         render_page_title,
         render_section_header,
-        render_footer,
     )
 
     HAS_LAYOUT = True
@@ -308,10 +316,11 @@ def render_content() -> None:
 
     This function intentionally renders only page content, in the
     following order: page title, dashboard status, KPI cards,
-    engineering departments, latest engineering record, placeholder
-    trend charts, and footer. Application configuration, sidebar,
-    navbar, and routing are handled by the application's top-level
-    entry point.
+    engineering departments, latest engineering record, and
+    placeholder trend charts. Application configuration, sidebar,
+    navbar, footer, and routing are handled by the application's
+    top-level entry point (``app.py``); this page never renders its
+    own footer.
 
     All data is sourced through ``OverviewService`` and all charts
     through ``ChartService``; this function never slices DataFrames,
@@ -344,9 +353,6 @@ def render_content() -> None:
         st.divider()
 
         _render_charts()
-
-        if HAS_LAYOUT:
-            render_footer()
 
     except Exception as exc:
         st.error(f"Unable to load Overview Dashboard: {exc}")
