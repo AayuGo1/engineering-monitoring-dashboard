@@ -25,6 +25,24 @@ This module intentionally contains:
 - No global error handling
 - No backend logic (workbook loading, parsing, repository/service access)
 - No hard dependency on `components.theme`
+
+Bugfix note
+-----------
+``_render_navigation_cards()`` and ``_render_system_status()``
+previously built each card's HTML with every interpolated value
+(icon, title, description, status value) placed on its own line, with
+blank lines separating the opening ``<div class="glass-card">`` /
+``<div class="status-card">`` wrapper from its children. Streamlit's
+``st.markdown()`` parses content as Markdown before honoring
+``unsafe_allow_html=True``: a blank line (or a line that collapses to
+whitespace-only, which happens whenever an interpolated value is an
+empty string) terminates Markdown's raw-HTML passthrough. Once that
+happens, subsequently indented lines are reinterpreted as an indented
+code block and rendered as literal, escaped text instead of HTML —
+exactly why cards could show raw ``<div class="card-title">`` markup
+on the page. Both helpers now emit a single continuous HTML string per
+card, with every tag and its interpolated value on one line, matching
+the fix already applied in ``components/cards.py``.
 """
 
 from __future__ import annotations
@@ -230,6 +248,11 @@ def _render_navigation_cards() -> None:
     router in `app.py` on the next rerun. This module does not perform
     routing itself; it only signals the desired destination using the
     plain page labels `app.py` expects (no icon prefixes).
+
+    Each card's HTML is built as a single continuous string (every tag
+    and its interpolated value on one line) so that Streamlit's
+    Markdown-then-HTML rendering never falls out of raw-HTML mode (see
+    module docstring).
     """
     if HAS_LAYOUT:
         render_section_header("Modules")
@@ -241,23 +264,11 @@ def _render_navigation_cards() -> None:
     for column, card in zip(columns, NAVIGATION_CARDS):
         with column:
             st.markdown(
-                f"""
-<div class="glass-card">
-
-<div class="card-icon">
-{card.icon}
-</div>
-
-<div class="card-title">
-{card.title}
-</div>
-
-<div class="card-description">
-{card.description}
-</div>
-
-</div>
-""",
+                '<div class="glass-card">'
+                f'<div class="card-icon">{card.icon}</div>'
+                f'<div class="card-title">{card.title}</div>'
+                f'<div class="card-description">{card.description}</div>'
+                "</div>",
                 unsafe_allow_html=True,
             )
 
@@ -271,7 +282,11 @@ def _render_navigation_cards() -> None:
 
 
 def _render_system_status() -> None:
-    """Render system status placeholder cards."""
+    """Render system status placeholder cards.
+
+    Each card's HTML is built as a single continuous string, matching
+    ``_render_navigation_cards()`` (see module docstring).
+    """
     if HAS_LAYOUT:
         render_section_header("System Status")
         columns = create_columns(len(SYSTEM_STATUS), gap="large")
@@ -282,19 +297,10 @@ def _render_system_status() -> None:
     for column, (title, value) in zip(columns, SYSTEM_STATUS):
         with column:
             st.markdown(
-                f"""
-<div class="status-card">
-
-<div class="status-title">
-{title}
-</div>
-
-<div class="status-value">
-{value}
-</div>
-
-</div>
-""",
+                '<div class="status-card">'
+                f'<div class="status-title">{title}</div>'
+                f'<div class="status-value">{value}</div>'
+                "</div>",
                 unsafe_allow_html=True,
             )
 
