@@ -28,32 +28,42 @@ Because the underlying DataFrame columns are integers, ``data_column``
 must never be used to index into a DataFrame returned by
 ``EngineeringRepository`` (``frame[date_column.data_column]`` fails to
 match, since ``"3" != 3``). This service always indexes DataFrames —
-for both meters and the Date column — using ``column_index``, so the
-two identifiers are never mixed.
+for both data columns and the Date column — using ``column_index``
+(or the equivalent raw DataFrame column labels discovered from the
+department's DataFrame), so the two identifiers are never mixed.
 
-Section Identification
------------------------
-``EngineeringParser`` (and therefore ``EngineeringRepository``) exposes
-no section/category metadata beyond a department's ``department_name``:
-``EngineeringDepartment`` carries only ``department_name``,
-``display_name``, and ``meters``, and ``EngineeringMeter`` carries only
-``meter_name``, ``display_name``, ``column_index``, and
-``data_column``. There is no grouping concept layered on top of
-ordinary department discovery for this service to resolve "the Air
-Compressor section" through instead.
+Section Structure — Dynamic Field Discovery
+--------------------------------------------
+Earlier versions of this service assumed the Air Compressor section
+was modeled as one meter *per logical reading* ("Pressure", "Air
+Flow", "Air Consumption", "Running Hours", "Running Load"), each
+resolved via ``EngineeringRepository.get_meter()`` by that hardcoded
+name.
 
-Given that, "Air Compressor" is treated as the name of an ordinary
-department, resolved exclusively through
-``EngineeringRepository.get_department()`` / ``get_meter()`` — the
-same name-based lookup every other service in this project already
-uses. To avoid burying that name inside method logic, it is exposed as
-a constructor parameter with a default, the same way
-``DepartmentAnalysisService`` treats department names as data supplied
-by the caller rather than something hardcoded into a method body. The
-same applies to the individual meter names (Pressure, Air Flow, Air
-Consumption, Running Hours, Running Load): they are configuration,
-overridable at construction time, not literals scattered through the
-class.
+The workbook does not model the section that way. It contains a
+single Air Compressor meter (e.g. "2F3 Air Compressor"); pressure,
+flow, consumption, running hours, and running load are separate
+*columns* within that meter's data, not separate named meters. Since
+``EngineeringMeter`` carries only ``meter_name``, ``display_name``,
+``column_index``, and ``data_column`` — no per-column role metadata —
+there is no name to search for beyond the meter itself.
+
+This service therefore:
+
+1. Resolves the section's meter dynamically — it looks up whichever
+   meter(s) the "Air Compressor" department actually contains via
+   ``EngineeringRepository.get_meter_names()`` / ``get_meter()``,
+   rather than assuming a specific meter name.
+2. Discovers the section's data columns dynamically from the
+   department's DataFrame (every column except the Date column, in
+   workbook order), rather than assuming fixed column identities.
+3. Addresses the five logical readings by *position* within that
+   discovered column list (``AirCompressorFieldPositions``), since
+   position in workbook order is the only distinguishing signal
+   available. Positions are configuration, overridable at
+   construction time — the same philosophy the previous hardcoded
+   meter names followed, just applied to the structure the workbook
+   actually has.
 
 This module intentionally contains:
 - No Streamlit
@@ -62,8 +72,9 @@ This module intentionally contains:
 - No UI logic
 - No workbook loading
 - No EngineeringParser interaction
-- No DataFrame slicing by position
-- No department or meter discovery logic of its own
+- No DataFrame slicing by position outside of the dynamic column
+  discovery described above
+- No hardcoded meter-name search logic
 """
 
 from __future__ import annotations
@@ -84,23 +95,28 @@ DEFAULT_SECTION_DEPARTMENT_NAME = "Air Compressor"
 
 
 @dataclass(frozen=True)
-class AirCompressorMeterNames:
+class AirCompressorFieldPositions:
     """
-    Display names of the Air Compressor section's meters.
+    Positional indices, within the Air Compressor section's
+    dynamically discovered data columns (Date column excluded, in
+    workbook order), of each logical reading.
 
-    These are the one piece of configuration this service cannot avoid
-    needing: resolving "the pressure meter" requires knowing what the
-    pressure meter is called, since ``EngineeringMeter`` exposes no
-    role/category metadata beyond its name. Overridable at
-    ``AirCompressorService`` construction time rather than hardcoded
-    into method bodies.
+    The workbook models the Air Compressor section as a single meter
+    whose pressure, flow, consumption, running hours, and running
+    load readings live in separate columns rather than as separate
+    named meters. Since ``EngineeringMeter`` exposes no per-column
+    role metadata, "the pressure column" can only be identified by
+    its position among the section's data columns. These positions
+    are configuration, overridable at ``AirCompressorService``
+    construction time, rather than hardcoded meter-name literals
+    scattered through the class.
     """
 
-    pressure: str = "Pressure"
-    air_flow: str = "Air Flow"
-    air_consumption: str = "Air Consumption"
-    running_hours: str = "Running Hours"
-    running_load: str = "Running Load"
+    pressure: int = 0
+    air_flow: int = 1
+    air_consumption: int = 2
+    running_hours: int = 3
+    running_load: int = 4
 
 
 @dataclass(frozen=True)
@@ -121,7 +137,8 @@ class AirCompressorSummary:
 
     meter_count:
         Number of engineering meters belonging to the Air Compressor
-        section.
+        section, as discovered from the workbook. With the section
+        modeled as a single meter, this is ordinarily ``1``.
     """
 
     latest_reading: float | None
@@ -138,13 +155,15 @@ class AirCompressorService:
     delegated to ``EngineeringRepository``; this class only combines
     repository results with ``DateFilter`` and ``ConsumptionCalculator``
     to answer UI-facing questions about the Air Compressor engineering
-    section.
+    section. The section's meter and data columns are discovered
+    dynamically from the workbook rather than assumed from hardcoded
+    meter names.
     """
 
     def __init__(
         self,
         department_name: str = DEFAULT_SECTION_DEPARTMENT_NAME,
-        meter_names: AirCompressorMeterNames = AirCompressorMeterNames(),
+        field_positions: AirCompressorFieldPositions = AirCompressorFieldPositions(),
     ) -> None:
         """
         Initialize the service and its collaborators.
@@ -156,16 +175,17 @@ class AirCompressorService:
             Compressor section. Defaults to
             ``DEFAULT_SECTION_DEPARTMENT_NAME``.
 
-        meter_names:
-            The display names of the section's meters. Defaults to
-            ``AirCompressorMeterNames()``.
+        field_positions:
+            The positions, among the section's dynamically discovered
+            data columns, of each logical reading. Defaults to
+            ``AirCompressorFieldPositions()``.
         """
         self._repository = EngineeringRepository()
         self._calculator = ConsumptionCalculator()
         self._date_filter = DateFilter()
 
         self._department_name = department_name
-        self._meter_names = meter_names
+        self._field_positions = field_positions
 
     # ------------------------------------------------------------------
     # Private Helpers
@@ -203,47 +223,125 @@ class AirCompressorService:
             f"department. Departments found instead: {available}."
         )
 
-    def _resolve_meter(self, meter_name: str) -> EngineeringMeter:
+    def _resolve_section_meter(self) -> EngineeringMeter:
         """
-        Resolve a meter within the Air Compressor department by name.
+        Resolve the Air Compressor section's meter dynamically.
 
-        Parameters
-        ----------
-        meter_name:
-            The meter's expected display name.
+        Rather than searching for a specific hardcoded meter name
+        (e.g. "2F3 Air Compressor"), this takes whichever meter(s) the
+        repository actually discovered within the Air Compressor
+        department and resolves the first one, since the section is
+        modeled as a single meter. This keeps the service correct
+        regardless of what that meter happens to be named in the
+        workbook.
 
         Returns
         -------
         EngineeringMeter
-            The matching meter.
+            The section's meter.
 
         Raises
         ------
         ValueError
-            If the Air Compressor department cannot be resolved, or if
-            no meter with the given name exists within it. The error
-            lists the meters that do exist, so a naming mismatch is
-            immediately diagnosable.
+            If the department cannot be resolved, or if it has no
+            meters registered.
         """
         self._resolve_department()
 
+        meter_names = list(
+            self._repository.get_meter_names(self._department_name)
+        )
+
+        if not meter_names:
+            raise ValueError(
+                f"The '{self._department_name}' department has no "
+                "meters registered in the workbook."
+            )
+
         meter = self._repository.get_meter(
             self._department_name,
-            meter_name,
+            meter_names[0],
         )
 
         if meter is not None:
             return meter
 
-        available = ", ".join(
-            self._repository.get_meter_names(self._department_name)
-        ) or "(none discovered)"
-
         raise ValueError(
-            f"Unable to resolve meter '{meter_name}' in the "
-            f"'{self._department_name}' department. Meters found "
-            f"instead: {available}."
+            f"Unable to resolve meter '{meter_names[0]}' in the "
+            f"'{self._department_name}' department."
         )
+
+    def _get_field_columns(self) -> List[int]:
+        """
+        Return the Air Compressor section's data columns, discovered
+        dynamically from the department's DataFrame.
+
+        Every column of the department DataFrame except the Date
+        column is treated as a data column (pressure, flow,
+        consumption, running hours, running load, or any other
+        reading the workbook happens to contain), in workbook order.
+        This replaces hardcoded per-reading meter-name lookups with
+        structure read directly from the data.
+
+        Returns
+        -------
+        List[int]
+            The section's non-Date column labels, in workbook order.
+            Empty if the department has no data.
+
+        Raises
+        ------
+        ValueError
+            If the department or its meter cannot be resolved.
+        """
+        self._resolve_section_meter()
+
+        dataframe = self._repository.get_department_dataframe(
+            self._department_name
+        )
+
+        if dataframe.empty:
+            return []
+
+        date_label = self._repository.get_date_column().column_index
+
+        return [
+            column for column in dataframe.columns if column != date_label
+        ]
+
+    def _resolve_field_column(self, position: int) -> int:
+        """
+        Resolve the DataFrame column label for a field at a given
+        position among the section's dynamically discovered data
+        columns.
+
+        Parameters
+        ----------
+        position:
+            The zero-based position, within the section's discovered
+            data columns, of the desired reading.
+
+        Returns
+        -------
+        int
+            The corresponding DataFrame column label.
+
+        Raises
+        ------
+        ValueError
+            If the department/meter cannot be resolved, or if
+            ``position`` falls outside the discovered data columns.
+        """
+        columns = self._get_field_columns()
+
+        if position < 0 or position >= len(columns):
+            raise ValueError(
+                f"Field position {position} is out of range for the "
+                f"'{self._department_name}' section, which has "
+                f"{len(columns)} discovered data column(s): {columns}."
+            )
+
+        return columns[position]
 
     def _calculate_summary_from_dataframe(
         self,
@@ -300,9 +398,9 @@ class AirCompressorService:
 
         return latest, previous, consumption
 
-    def _get_filtered_meter_trend(
+    def _get_filtered_field_trend(
         self,
-        meter_name: str,
+        position: int,
         mode: str,
         *,
         selected_date: Optional[date] = None,
@@ -312,7 +410,7 @@ class AirCompressorService:
         end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return a meter's readings, optionally filtered using ``DateFilter``.
+        Return a field's readings, optionally filtered using ``DateFilter``.
 
         Single reusable helper backing every trend method
         (``get_pressure_trend``, ``get_flow_trend``,
@@ -322,21 +420,22 @@ class AirCompressorService:
         ``DepartmentAnalysisService.get_filtered_department_data``: the
         Date column is always resolved through
         ``EngineeringRepository.get_date_column()``, never assumed or
-        duplicated here, and the meter column is always resolved
-        through ``EngineeringRepository.get_meter()``, never sliced by
-        position. Both are indexed into the department DataFrame using
-        their ``column_index`` (the actual DataFrame column label),
-        never their ``data_column`` string, so the two identifiers are
-        never mixed.
+        duplicated here, and the field column is always resolved
+        through ``_resolve_field_column()`` (dynamic discovery from
+        the department DataFrame), never a hardcoded meter-name
+        lookup. Both are indexed into the department DataFrame using
+        their actual DataFrame column labels, never a stringified
+        ``data_column``, so the two identifiers are never mixed.
 
         Parameters
         ----------
-        meter_name:
-            The target meter's display name.
+        position:
+            The zero-based position, within the section's discovered
+            data columns, of the desired reading.
 
         mode:
             The filter mode: ``"latest"``, ``"day"``, ``"month"``, or
-            ``"range"``. Any other value returns the meter's
+            ``"range"``. Any other value returns the field's
             unfiltered readings.
 
         selected_date:
@@ -357,19 +456,18 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The meter's (optionally filtered) readings, indexed by the
-            corresponding engineering Date values so charts built from
-            this Series plot against real dates instead of row
+            The field's (optionally filtered) readings, indexed by
+            the corresponding engineering Date values so charts built
+            from this Series plot against real dates instead of row
             numbers.
 
         Raises
         ------
         ValueError
-            If the department or meter cannot be resolved, or if the
-            repository cannot identify a Date column.
+            If the department or meter cannot be resolved, if the
+            repository cannot identify a Date column, or if
+            ``position`` falls outside the discovered data columns.
         """
-        meter = self._resolve_meter(meter_name)
-
         department_frame = self._repository.get_department_dataframe(
             self._department_name
         )
@@ -377,11 +475,12 @@ class AirCompressorService:
         if department_frame.empty:
             return pd.Series(dtype=float)
 
+        field_label = self._resolve_field_column(position)
+
         date_column = self._repository.get_date_column()
         date_label = date_column.column_index
-        meter_label = meter.column_index
 
-        subset = department_frame[[meter_label, date_label]].copy()
+        subset = department_frame[[field_label, date_label]].copy()
 
         normalized_mode = mode.lower()
 
@@ -405,7 +504,7 @@ class AirCompressorService:
         if filtered.empty:
             return pd.Series(dtype=float)
 
-        return filtered.set_index(date_label)[meter_label]
+        return filtered.set_index(date_label)[field_label]
 
     # ------------------------------------------------------------------
     # Public API
@@ -413,25 +512,30 @@ class AirCompressorService:
 
     def get_available_meters(self) -> List[str]:
         """
-        Return the display names of meters belonging to the Air
-        Compressor section.
+        Return labels for the Air Compressor section's dynamically
+        discovered data columns.
+
+        With the section modeled as a single meter, these are not
+        separate meter names but the section's individual reading
+        columns (pressure, flow, consumption, running hours, running
+        load, or whatever else the workbook happens to contain),
+        labeled by their raw DataFrame column values and returned in
+        workbook order.
 
         Returns
         -------
         List[str]
-            Display names of the Air Compressor section's meters, in
-            workbook order.
+            String labels of the Air Compressor section's data
+            columns, in workbook order.
 
         Raises
         ------
         ValueError
-            If the Air Compressor department cannot be resolved.
+            If the Air Compressor department or its meter cannot be
+            resolved.
         """
-        self._resolve_department()
-
-        return list(
-            self._repository.get_meter_names(self._department_name)
-        )
+        columns = self._get_field_columns()
+        return [str(column) for column in columns]
 
     def get_compressor_dataframe(self) -> pd.DataFrame:
         """
@@ -440,7 +544,7 @@ class AirCompressorService:
         Returns
         -------
         pandas.DataFrame
-            The Air Compressor section's meter columns plus the
+            The Air Compressor section's data columns plus the
             workbook's Date column, exactly as provided by
             ``EngineeringRepository.get_department_dataframe()``.
 
@@ -481,9 +585,10 @@ class AirCompressorService:
 
         Numerical values are calculated using ``ConsumptionCalculator``,
         following the same pattern used by
-        ``DepartmentAnalysisService.get_department_summary()``. Meter
-        counts are sourced from department metadata returned by the
-        repository.
+        ``DepartmentAnalysisService.get_department_summary()``. The
+        meter count reflects however many meters the repository
+        actually discovered for the section (ordinarily ``1``, since
+        the section is modeled as a single meter).
 
         Returns
         -------
@@ -534,7 +639,7 @@ class AirCompressorService:
         end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return the pressure meter's readings, optionally filtered by
+        Return the pressure reading's values, optionally filtered by
         date using ``DateFilter``.
 
         Parameters
@@ -561,15 +666,15 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The pressure meter's engineering readings.
+            The pressure reading's engineering values.
 
         Raises
         ------
         ValueError
-            If the pressure meter cannot be resolved.
+            If the pressure column cannot be resolved.
         """
-        return self._get_filtered_meter_trend(
-            self._meter_names.pressure,
+        return self._get_filtered_field_trend(
+            self._field_positions.pressure,
             mode,
             selected_date=selected_date,
             month=month,
@@ -589,7 +694,7 @@ class AirCompressorService:
         end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return the air flow meter's readings, optionally filtered by
+        Return the air flow reading's values, optionally filtered by
         date using ``DateFilter``.
 
         Parameters
@@ -616,15 +721,15 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The air flow meter's engineering readings.
+            The air flow reading's engineering values.
 
         Raises
         ------
         ValueError
-            If the air flow meter cannot be resolved.
+            If the air flow column cannot be resolved.
         """
-        return self._get_filtered_meter_trend(
-            self._meter_names.air_flow,
+        return self._get_filtered_field_trend(
+            self._field_positions.air_flow,
             mode,
             selected_date=selected_date,
             month=month,
@@ -644,7 +749,7 @@ class AirCompressorService:
         end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return the air consumption meter's readings, optionally
+        Return the air consumption reading's values, optionally
         filtered by date using ``DateFilter``.
 
         Parameters
@@ -671,15 +776,15 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The air consumption meter's engineering readings.
+            The air consumption reading's engineering values.
 
         Raises
         ------
         ValueError
-            If the air consumption meter cannot be resolved.
+            If the air consumption column cannot be resolved.
         """
-        return self._get_filtered_meter_trend(
-            self._meter_names.air_consumption,
+        return self._get_filtered_field_trend(
+            self._field_positions.air_consumption,
             mode,
             selected_date=selected_date,
             month=month,
@@ -699,8 +804,8 @@ class AirCompressorService:
         end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return the running hours meter's readings, optionally filtered
-        by date using ``DateFilter``.
+        Return the running hours reading's values, optionally
+        filtered by date using ``DateFilter``.
 
         Parameters
         ----------
@@ -726,15 +831,15 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The running hours meter's engineering readings.
+            The running hours reading's engineering values.
 
         Raises
         ------
         ValueError
-            If the running hours meter cannot be resolved.
+            If the running hours column cannot be resolved.
         """
-        return self._get_filtered_meter_trend(
-            self._meter_names.running_hours,
+        return self._get_filtered_field_trend(
+            self._field_positions.running_hours,
             mode,
             selected_date=selected_date,
             month=month,
@@ -754,7 +859,7 @@ class AirCompressorService:
         end_date: Optional[date] = None,
     ) -> pd.Series:
         """
-        Return the running load meter's readings, optionally filtered
+        Return the running load reading's values, optionally filtered
         by date using ``DateFilter``.
 
         Parameters
@@ -781,15 +886,15 @@ class AirCompressorService:
         Returns
         -------
         pandas.Series
-            The running load meter's engineering readings.
+            The running load reading's engineering values.
 
         Raises
         ------
         ValueError
-            If the running load meter cannot be resolved.
+            If the running load column cannot be resolved.
         """
-        return self._get_filtered_meter_trend(
-            self._meter_names.running_load,
+        return self._get_filtered_field_trend(
+            self._field_positions.running_load,
             mode,
             selected_date=selected_date,
             month=month,
