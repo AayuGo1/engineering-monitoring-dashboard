@@ -169,6 +169,23 @@ class EngineeringParser:
     def _build_metadata(self) -> None:
         """
         Parse department and meter metadata from the fixed workbook schema.
+
+        Each department contains exactly one physical meter. Its
+        identity is read once, from the meter-row cell at the column
+        where the department itself begins (e.g.
+        ``"2F3 Air Compressor"``), and exactly one ``EngineeringMeter``
+        is constructed for it at that boundary column. Later columns
+        that continue the same department -- signalled by a
+        blank/merged department cell -- are per-meter data fields
+        (e.g. ``"Pressure"``, ``"Air Flow"``, ``"Comp 1 Running
+        Hours"``), not additional equipment, and are therefore never
+        used to construct another ``EngineeringMeter``. This keeps the
+        parser's meter count aligned with the physical meter count in
+        the workbook (one ``EngineeringMeter`` per meter) instead of
+        one per column. Per-column reading data continues to live in
+        the department's own DataFrame and is discovered directly from
+        there by the service layer, not from ``EngineeringMeter``
+        objects.
         """
         if self._departments is not None:
             return
@@ -194,15 +211,20 @@ class EngineeringParser:
             if not department and not meter:
                 continue
 
-            # Propagate merged department headers.
-            if department:
-                current_department = department
-
-            # Ignore columns before the first department.
-            if not current_department:
+            # Only a department cell marks a new department boundary.
+            # Columns that continue an already-open department (blank
+            # department cell, part of the same merged Excel range)
+            # are intentionally skipped below: they are data fields of
+            # the meter already constructed at the boundary, never a
+            # trigger for constructing another one.
+            if not department:
                 continue
 
-            # Skip department columns that do not contain a meter.
+            current_department = department
+
+            # Ignore a department boundary column with no meter-row
+            # value; without a meter name there is nothing to
+            # construct for this department.
             if not meter:
                 continue
 
