@@ -62,6 +62,16 @@ This service therefore:
    the same philosophy the previous hardcoded meter names followed,
    just applied to the structure the workbook actually has.
 
+   A given workbook is not guaranteed to actually contain all four
+   logical readings -- the section's discovered data-column count can
+   be fewer (or more) than the four positions configured by
+   ``FreonFieldPositions`` assume. Resolving a configured position
+   that the workbook does not provide is therefore not treated as an
+   error: it means that particular reading is simply absent from this
+   workbook, and the corresponding trend method reports it as such
+   (an empty ``pandas.Series``) instead of raising. See
+   ``_resolve_field_column`` and ``_get_filtered_field_trend``.
+
 This module intentionally contains:
 - No Streamlit
 - No HTML
@@ -107,6 +117,11 @@ class FreonFieldPositions:
     are configuration, overridable at ``FreonService`` construction
     time, rather than hardcoded meter-name literals scattered through
     the class.
+
+    Not every workbook is guaranteed to provide data columns for all
+    four positions below. A workbook with fewer discovered data
+    columns than a given position requires simply does not have that
+    reading; see ``FreonService._resolve_field_column``.
     """
 
     temperature: int = 0
@@ -307,11 +322,22 @@ class FreonService:
             column for column in dataframe.columns if column != date_label
         ]
 
-    def _resolve_field_column(self, position: int) -> int:
+    def _resolve_field_column(self, position: int) -> Optional[int]:
         """
         Resolve the DataFrame column label for a field at a given
         position among the section's dynamically discovered data
         columns.
+
+        The number of data columns a workbook actually provides for
+        this section is not guaranteed to match the four logical
+        readings (temperature, pressure, Freon level, running hours)
+        that ``FreonFieldPositions`` defaults assume -- a workbook may
+        expose fewer (or more) data columns than that. Rather than
+        treating a configured position beyond what the workbook
+        actually contains as an error, this method reports the
+        reading as unavailable so callers can degrade gracefully (see
+        ``_get_filtered_field_trend``), instead of assuming every
+        workbook has exactly four Freon Refrigeration data columns.
 
         Parameters
         ----------
@@ -321,23 +347,21 @@ class FreonService:
 
         Returns
         -------
-        int
-            The corresponding DataFrame column label.
+        int | None
+            The corresponding DataFrame column label, or ``None`` if
+            ``position`` falls outside the section's dynamically
+            discovered data columns (i.e. the workbook does not
+            provide that many readings for this section).
 
         Raises
         ------
         ValueError
-            If the department/meter cannot be resolved, or if
-            ``position`` falls outside the discovered data columns.
+            If the department or its meter cannot be resolved.
         """
         columns = self._get_field_columns()
 
         if position < 0 or position >= len(columns):
-            raise ValueError(
-                f"Field position {position} is out of range for the "
-                f"'{self._department_name}' section, which has "
-                f"{len(columns)} discovered data column(s): {columns}."
-            )
+            return None
 
         return columns[position]
 
@@ -470,6 +494,14 @@ class FreonService:
         their actual DataFrame column labels, never a stringified
         ``data_column``, so the two identifiers are never mixed.
 
+        If ``position`` does not correspond to a data column the
+        workbook actually provides for this section (for example, a
+        workbook exposing only two Freon Refrigeration data columns
+        while ``position`` addresses the third or fourth logical
+        reading), this is not treated as an error: the reading is
+        simply absent from this workbook, and an empty series is
+        returned, exactly as when the department itself has no data.
+
         Parameters
         ----------
         position:
@@ -502,14 +534,15 @@ class FreonService:
             The field's (optionally filtered) readings, indexed by
             the corresponding engineering Date values so charts built
             from this Series plot against real dates instead of row
-            numbers.
+            numbers. Empty if the department has no data or if
+            ``position`` addresses a reading the workbook does not
+            provide for this section.
 
         Raises
         ------
         ValueError
-            If the department or meter cannot be resolved, if the
-            repository cannot identify a Date column, or if
-            ``position`` falls outside the discovered data columns.
+            If the department or meter cannot be resolved, or if the
+            repository cannot identify a Date column.
         """
         department_frame = self._repository.get_department_dataframe(
             self._department_name
@@ -519,6 +552,9 @@ class FreonService:
             return pd.Series(dtype=float)
 
         field_label = self._resolve_field_column(position)
+
+        if field_label is None:
+            return pd.Series(dtype=float)
 
         date_column = self._repository.get_date_column()
         date_label = date_column.column_index
@@ -795,6 +831,10 @@ class FreonService:
         Return the temperature reading's values, optionally filtered
         by date using ``DateFilter``.
 
+        Returns an empty series if the workbook does not provide a
+        data column at the configured temperature position (see
+        ``FreonFieldPositions``).
+
         Parameters
         ----------
         mode:
@@ -824,7 +864,7 @@ class FreonService:
         Raises
         ------
         ValueError
-            If the temperature column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.temperature,
@@ -849,6 +889,10 @@ class FreonService:
         """
         Return the pressure reading's values, optionally filtered by
         date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured pressure position (see
+        ``FreonFieldPositions``).
 
         Parameters
         ----------
@@ -879,7 +923,7 @@ class FreonService:
         Raises
         ------
         ValueError
-            If the pressure column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.pressure,
@@ -904,6 +948,10 @@ class FreonService:
         """
         Return the Freon level reading's values, optionally filtered
         by date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured Freon level position (see
+        ``FreonFieldPositions``).
 
         Parameters
         ----------
@@ -934,7 +982,7 @@ class FreonService:
         Raises
         ------
         ValueError
-            If the Freon level column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.freon_level,
@@ -959,6 +1007,10 @@ class FreonService:
         """
         Return the running hours reading's values, optionally
         filtered by date using ``DateFilter``.
+
+        Returns an empty series if the workbook does not provide a
+        data column at the configured running hours position (see
+        ``FreonFieldPositions``).
 
         Parameters
         ----------
@@ -989,7 +1041,7 @@ class FreonService:
         Raises
         ------
         ValueError
-            If the running hours column cannot be resolved.
+            If the department or meter cannot be resolved.
         """
         return self._get_filtered_field_trend(
             self._field_positions.running_hours,
