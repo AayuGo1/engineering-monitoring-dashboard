@@ -24,18 +24,29 @@ call ``.render()`` continue to work without modification.
 
 Bugfix note
 -----------
-``BaseCard._render_html()`` previously returned HTML with blank lines
-separating indented tags. ``st.markdown()`` parses content as Markdown
-before honoring ``unsafe_allow_html=True``: a line beginning with a
-block tag (e.g. ``<div>``) opens a raw "HTML block" that Markdown
-passes through verbatim only until the next blank line. Once that
-blank line is hit, Markdown falls back to normal parsing, where any
-line indented 4+ spaces becomes an *indented code block* and is
-rendered as literal, escaped text rather than HTML. That is exactly
-why cards were showing raw ``<div class="card-header">`` tags on the
-page. The fix removes the blank lines inside the returned HTML string
-so the entire card stays inside a single continuous HTML block. No
-classes, attributes, content, or structure were changed.
+``BaseCard._render_html()`` previously returned HTML with interpolated
+values placed on their own lines (e.g. a line containing only
+``{_safe_text(self.subtitle)}`` plus leading whitespace). ``st.markdown()``
+parses content as Markdown before honoring ``unsafe_allow_html=True``: a
+line beginning with a block tag (e.g. ``<div>``) opens a raw "HTML block"
+that Markdown passes through verbatim only until the next blank line.
+When a field such as ``subtitle``, ``description``, or ``footer`` is an
+empty string, the line that previously held only that interpolated value
+collapses into a whitespace-only line. Markdown treats a whitespace-only
+line exactly like a blank line, so it still terminates the raw-HTML
+block even though no literally empty line exists in the source template.
+Once that happens, Markdown falls back to normal parsing, where any line
+indented 4+ spaces becomes an *indented code block* and is rendered as
+literal, escaped text rather than HTML. That is exactly why cards were
+showing raw ``<div class="card-header">`` tags on the page.
+
+The fix places every interpolated value on the same line as its opening
+and closing tag (e.g. ``<div class="card-subtitle">{value}</div>``)
+instead of on its own line. This guarantees that every line in the
+returned HTML always contains at least the surrounding tag characters,
+so no line can ever become whitespace-only regardless of which fields
+are empty. No classes, attributes, content, hierarchy, or CSS were
+changed.
 """
 
 from __future__ import annotations
@@ -300,31 +311,33 @@ class BaseCard(ABC):
         4-space-indented line is reinterpreted as an indented code
         block and rendered as literal text instead of HTML. Keeping
         the block blank-line-free avoids that failure mode.
+
+        Each interpolated value is placed on the same line as its
+        opening and closing tag (e.g. ``<div>{value}</div>``) rather
+        than on its own line. This matters because when a field such
+        as ``subtitle``, ``description``, or ``footer`` is an empty
+        string, a line that previously contained only that
+        interpolated value collapses into a whitespace-only line.
+        Markdown treats a whitespace-only line exactly like a blank
+        line, which still terminates the raw-HTML block even though
+        no truly empty line appears in the source template. Keeping
+        every tag and its value on one line guarantees the line still
+        contains visible, non-whitespace characters (the tags
+        themselves) regardless of whether the interpolated value is
+        empty.
         """
 
         return f"""<div class="dashboard-card">
     <div class="card-header">
-        <div class="card-icon">
-            {_safe_text(self.icon)}
-        </div>
+        <div class="card-icon">{_safe_text(self.icon)}</div>
         <div>
-            <div class="card-title">
-                {_safe_text(self.title)}
-            </div>
-            <div class="card-subtitle">
-                {_safe_text(self.subtitle)}
-            </div>
+            <div class="card-title">{_safe_text(self.title)}</div>
+            <div class="card-subtitle">{_safe_text(self.subtitle)}</div>
         </div>
     </div>
-    <div class="card-value">
-        {_safe_text(self.value)}
-    </div>
-    <div class="card-description">
-        {_safe_text(self.description)}
-    </div>
-    <div class="card-footer">
-        {_safe_text(self.footer)}
-    </div>
+    <div class="card-value">{_safe_text(self.value)}</div>
+    <div class="card-description">{_safe_text(self.description)}</div>
+    <div class="card-footer">{_safe_text(self.footer)}</div>
 </div>"""
 
     def render(self) -> None:
