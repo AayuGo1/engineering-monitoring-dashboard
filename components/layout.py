@@ -28,6 +28,27 @@ while preserving every existing public function name and signature
 (``render_page_container``, ``render_page_title``,
 ``render_section_header``, ``render_footer``, ``vertical_space``,
 ``create_columns``).
+
+Bugfix note
+-----------
+``render_page_title()``, ``render_section_header()``, and
+``render_footer()`` previously built their HTML with each interpolated
+value placed on its own line, and with blank lines separating sibling
+``<div>`` blocks (e.g. a blank line between the title block and the
+subtitle block). ``st.markdown()`` parses content as Markdown before
+honoring ``unsafe_allow_html=True``: a blank line — or a line that is
+only whitespace, which is exactly what an empty interpolated value
+line collapses into — terminates Markdown's raw-HTML passthrough.
+Once that happens, any subsequently indented line is reinterpreted as
+an indented code block and rendered as literal, escaped text instead
+of HTML, which is why titles/headers/footers could show raw
+``<div class="...">`` tags on the page.
+
+The fix keeps every tag and its interpolated value on a single
+continuous line (no blank lines, no lines that could collapse to
+whitespace-only), mirroring the same fix already applied in
+``components/cards.py``. No classes, attributes, content, or CSS were
+changed.
 """
 
 from __future__ import annotations
@@ -243,18 +264,20 @@ def render_page_title(
 
     subtitle:
         Supporting subtitle.
+
+    Notes
+    -----
+    Both blocks are emitted as a single continuous HTML string, with
+    each interpolated value kept on the same line as its surrounding
+    tag. This avoids the blank-line / whitespace-only-line failure
+    mode described in the module docstring, which otherwise causes
+    Streamlit's Markdown parser to fall out of raw-HTML mode and
+    render the tags as literal text.
     """
 
     st.markdown(
-        f"""
-<div class="emd-page-title">
-{title}
-</div>
-
-<div class="emd-page-subtitle">
-{subtitle}
-</div>
-""",
+        f'<div class="emd-page-title">{title}</div>'
+        f'<div class="emd-page-subtitle">{subtitle}</div>',
         unsafe_allow_html=True,
     )
 
@@ -273,52 +296,43 @@ def render_section_header(
 
     description:
         Optional supporting description.
+
+    Notes
+    -----
+    Emitted as a single continuous HTML string (see
+    ``render_page_title`` notes) so an empty/missing ``description``
+    can never introduce a blank or whitespace-only line that would
+    break raw-HTML rendering.
     """
 
-    st.markdown(
-        f"""
-<div class="emd-section-title">
-{title}
-</div>
-""",
-        unsafe_allow_html=True,
-    )
+    html = f'<div class="emd-section-title">{title}</div>'
 
     if description:
-
-        st.markdown(
-            f"""
-<div class="emd-section-description">
-{description}
-</div>
-""",
-            unsafe_allow_html=True,
+        html += (
+            f'<div class="emd-section-description">{description}</div>'
         )
+
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render_footer() -> None:
     """
     Render the reusable application footer.
+
+    This is the single owner of the application footer and is called
+    exactly once, by ``app.py``, at the end of every page render.
+    Individual page modules must never call this themselves, or the
+    footer will be rendered twice.
     """
 
     vertical_space("xl")
 
     st.markdown(
-        """
-<div class="emd-footer">
-
-Engineering Monitoring Dashboard
-
-<br>
-
-Version 1.0
-
-<br>
-
-Developed for Internship Project
-
-</div>
-""",
+        '<div class="emd-footer">'
+        "Engineering Monitoring Dashboard<br>"
+        "Version 1.0<br>"
+        "Developed for Internship Project"
+        "</div>",
         unsafe_allow_html=True,
     )
 
